@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Phone spectrometer</title>
+<style>
+:root{--bg:#0e1116;--panel:#171b22;--line:#2a313c;--fg:#e6e9ee;--mut:#9aa4b2;--acc:#4cc2ff;--warn:#ffb454;--bad:#ff6b6b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  padding:max(10px,env(safe-area-inset-top)) 10px 40px}
+h1{font-size:18px;margin:6px 0 4px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;margin:10px 0}
+canvas{width:100%;display:block;border-radius:6px;background:#000}
+#view{touch-action:none;cursor:crosshair}
+#video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+button,select,input[type=number]{font:inherit;color:var(--fg);background:#222a35;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+button.primary{background:var(--acc);color:#001a26;border-color:var(--acc);font-weight:600}
+button:active{filter:brightness(1.25)}
+button:disabled{opacity:.45}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+label{color:var(--mut);display:flex;gap:6px;align-items:center}
+.small{color:var(--mut);font-size:12px}
+.warn{color:var(--warn)} .bad{color:var(--bad)}
+table{width:100%;border-collapse:collapse}
+td,th{padding:4px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<h1>Phone spectrometer</h1>
+<div class="small" id="status">Press “Start camera”, or load a photo.</div>
+<div class="small warn" id="secure" hidden>The browser only gives the camera to pages served over HTTPS (or localhost).</div>
+
+<div class="panel">
+  <div class="row">
+    <button class="primary" id="btnStart">Start camera</button>
+    <select id="selCam" hidden></select>
+    <button id="btnFreeze" disabled>Freeze</button>
+    <button id="btnLoad">Load photo</button>
+    <input type="file" id="file" accept="image/*" hidden>
+  </div>
+  <canvas id="view" width="640" height="480"></canvas>
+  <video id="video" playsinline muted autoplay></video>
+  <div class="small">Drag on the image to box the spectrum window. The yellow rectangle is what gets measured.</div>
+  <div class="row">
+    <label><input type="checkbox" id="chkLock"> lock region</label>
+    <label>axis
+      <select id="selOrient"><option value="auto">auto</option><option value="vertical">vertical</option><option value="horizontal">horizontal</option></select>
+    </label>
+    <label><input type="checkbox" id="chkFlip"> flip</label>
+  </div>
+</div>
+
+<div class="panel">
+  <canvas id="plot" style="height:260px"></canvas>
+  <div class="small" id="readout">&nbsp;</div>
+  <div class="row">
+    <label>smooth <input type="range" id="rngSmooth" min="0" max="8" value="2"></label>
+    <label>average <input type="range" id="rngAvg" min="1" max="32" value="4"></label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="chkLin" checked> linearize</label>
+    <label><input type="checkbox" id="chkNorm" checked> normalize</label>
+    <label>channel
+      <select id="selChan"><option value="sum">R+G+B</option><option value="max">max</option><option value="g">green</option></select>
+    </label>
+  </div>
+  <div class="row"><button id="btnDark">Store dark</button><button id="btnDarkClear">Clear dark</button></div>
+</div>
+
+<div class="panel">
+  <b>Calibration</b>
+  <div class="small">Tap a line on the plot, then say which line it is. Two points give a straight line, three or more fit a curve.</div>
+  <div class="row">
+    <label>lamp <select id="selPreset"></select></label>
+    <label>fit
+      <select id="selOrder"><option value="auto">auto</option><option value="1">linear</option><option value="2">quadratic</option><option value="3">cubic</option></select>
+    </label>
+  </div>
+  <div id="pending" class="small">No line selected.</div>
+  <div class="row" id="lineBtns"></div>
+  <div class="row">
+    <input type="number" id="numNm" placeholder="nm" step="0.1" style="width:90px">
+    <button id="btnAddNm">Add</button>
+    <button id="btnCalClear">Clear calibration</button>
+  </div>
+  <table id="calTable"></table>
+  <div class="small" id="calInfo"></div>
+</div>
+
+<div class="panel" id="camCtl" hidden>
+  <b>Camera controls</b>
+  <div id="camSliders" class="row"></div>
+  <div class="small" id="camNote" hidden>This browser gives pages no exposure or focus control. Keep the lines from clipping by lowering the lamp brightness, or take a photo with the camera app (exposure slider) and use “Load photo”.</div>
+</div>
+
+<div class="panel">
+  <div class="row">
+    <button id="btnCsv">Save CSV</button>
+    <button id="btnPng">Save PNG</button>
+    <button id="btnReset">Reset all settings</button>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+// <pure>
+function wl2rgb(w){
+  let r=0,g=0,b=0;
+  if(w>=380&&w<440){r=-(w-440)/60;b=1;}
+  else if(w>=440&&w<490){g=(w-440)/50;b=1;}
+  else if(w>=490&&w<510){g=1;b=-(w-510)/20;}
+  else if(w>=510&&w<580){r=(w-510)/70;g=1;}
+  else if(w>=580&&w<645){r=1;g=-(w-645)/65;}
+  else if(w>=645&&w<=780){r=1;}
+  let f=1; if(w<420)f=0.3+0.7*(w-380)/40; else if(w>700)f=0.3+0.7*(780-w)/80;
+  if(w<380||w>780) f=0.15;
+  return [Math.round(255*Math.pow(r*f,0.8)),Math.round(255*Math.pow(g*f,0.8)),Math.round(255*Math.pow(b*f,0.8))];
+}
+
+function smoothArr(a,k){
+  if(k<=0) return Float64Array.from(a);
+  const n=a.length,o=new Float64Array(n);
+  for(let i=0;i<n;i++){let s=0,c=0;for(let j=i-k;j<=i+k;j++){if(j>=0&&j<n){s+=a[j];c++;}}o[i]=s/c;}
+  return o;
+}
+
+function findPeaks(ys,opts){
+  opts=opts||{};
+  const n=ys.length; let mx=-Infinity,mn=Infinity;
+  for(let i=0;i<n;i++){if(ys[i]>mx)mx=ys[i];if(ys[i]<mn)mn=ys[i];}
+  const range=mx-mn; if(!(range>0)||n<5) return [];
+  const minProm=(opts.prom!==undefined?opts.prom:0.06)*range, win=opts.win||14, minDist=opts.minDist||4;
+  let cand=[];
+  for(let i=1;i<n-1;i++){
+    if(ys[i]>ys[i-1]&&ys[i]>=ys[i+1]){
+      let lmin=ys[i]; for(let k=i-1;k>=Math.max(0,i-win);k--){if(ys[k]<lmin)lmin=ys[k];if(ys[k]>ys[i])break;}
+      let rmin=ys[i]; for(let k=i+1;k<=Math.min(n-1,i+win);k++){if(ys[k]<rmin)rmin=ys[k];if(ys[k]>ys[i])break;}
+      const base=Math.max(lmin,rmin), prom=ys[i]-base;
+      if(prom>=minProm) cand.push({i:i,y:ys[i],base:base,prom:prom});
+    }
+  }
+  cand.sort((a,b)=>b.y-a.y);
+  const keep=[];
+  for(const c of cand){ if(keep.every(k=>Math.abs(k.i-c.i)>=minDist)) keep.push(c); }
+  keep.sort((a,b)=>a.i-b.i);
+  for(const p of keep){
+    const half=(p.y+p.base)/2;
+    let l=p.i; while(l>0&&ys[l-1]>half) l--;
+    let r=p.i; while(r<n-1&&ys[r+1]>half) r++;
+    // sub-sample half-max crossings
+    let lx=l, rx=r;
+    if(l>0){const a=ys[l-1],b=ys[l]; if(b!==a) lx=l-1+(half-a)/(b-a);}
+    if(r<n-1){const a=ys[r],b=ys[r+1]; if(a!==b) rx=r+(a-half)/(a-b);}
+    p.fwhm=Math.max(1,rx-lx);
+    let sw=0,sx=0; for(let k=l;k<=r;k++){const w=ys[k]-p.base; if(w>0){sw+=w;sx+=w*k;}}
+    p.pos=sw>0?sx/sw:p.i;
+  }
+  return keep;
+}
+
+function polyfit(xs,ys,deg){
+  const n=xs.length; if(n<deg+1) return null;
+  let x0=0; for(const x of xs) x0+=x; x0/=n;
+  let sx=0; for(const x of xs) sx=Math.max(sx,Math.abs(x-x0)); if(!(sx>0)) return null;
+  const m=deg+1, A=[];
+  for(let r=0;r<m;r++){A.push(new Array(m+1).fill(0));}
+  for(let k=0;k<n;k++){
+    const t=(xs[k]-x0)/sx, pw=[1]; for(let j=1;j<2*m;j++) pw[j]=pw[j-1]*t;
+    for(let r=0;r<m;r++){for(let c=0;c<m;c++)A[r][c]+=pw[r+c]; A[r][m]+=pw[r]*ys[k];}
+  }
+  for(let i=0;i<m;i++){
+    let p=i; for(let r=i+1;r<m;r++) if(Math.abs(A[r][i])>Math.abs(A[p][i])) p=r;
+    const tmp=A[i];A[i]=A[p];A[p]=tmp;
+    if(Math.abs(A[i][i])<1e-12) return null;
+    for(let r=i+1;r<m;r++){const f=A[r][i]/A[i][i]; for(let c=i;c<=m;c++)A[r][c]-=f*A[i][c];}
+  }
+  const c=new Array(m).fill(0);
+  for(let i=m-1;i>=0;i--){let s=A[i][m];for(let j=i+1;j<m;j++)s-=A[i][j]*c[j];c[i]=s/A[i][i];}
+  return {c:c,x0:x0,sx:sx};
+}
+function polyval(f,x){const t=(x-f.x0)/f.sx;let r=0;for(let i=f.c.length-1;i>=0;i--)r=r*t+f.c[i];return r;}
+
+function niceStep(range,target){
+  const raw=range/target, p=Math.pow(10,Math.floor(Math.log10(raw))), f=raw/p;
+  return (f<1.5?1:f<3.5?2:f<7.5?5:10)*p;
+}
+// </pure>
+
+const $=id=>document.getElementById(id);
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const view=$('view'), vctx=view.getContext('2d');
+const plot=$('plot'), pctx=plot.getContext('2d');
+const video=$('video');
+const off=document.createElement('canvas'), octx=off.getContext('2d',{willReadFrequently:true});
+const snap=document.createElement('canvas'), sctx=snap.getContext('2d');
+
+const PRESETS={
+  'Mercury lamp':[[404.7],[435.8],[491.6],[546.1],[577.0],[579.1],[623.4],[690.7]],
+  'Fluorescent (CFL)':[[435.8],[487.7],[546.5],[611.6]],
+  'Sodium':[[568.8],[589.0],[589.6],[615.4]],
+  'Laser pointers':[[532.0],[650.0]]
+};
+const LIN=new Float32Array(256), ID=new Float32Array(256);
+for(let i=0;i<256;i++){LIN[i]=Math.pow(i/255,2.2);ID[i]=i/255;}
+
+const KEY='spectro.v1';
+const S={
+  src:null,srcW:0,srcH:0,mode:'none', // none | live | still
+  roi:{x:0.35,y:0.4,w:0.3,h:0.25}, lock:false, orient:'auto', flip:false,
+  smooth:2, avg:4, lin:true, norm:true, channel:'sum', preset:'Mercury lamp',
+  cal:{pts:[],order:'auto',axisLen:0,vertical:true},
+  fit:null, fitDeg:0, ema:null, emaKey:'', dark:null, spec:null, satFrac:0,
+  pending:null, stream:null, track:null, plotInfo:null
+};
+
+// ---------- persistence ----------
+function save(){
+  try{localStorage.setItem(KEY,JSON.stringify({roi:S.roi,lock:S.lock,orient:S.orient,flip:S.flip,smooth:S.smooth,avg:S.avg,
+    lin:S.lin,norm:S.norm,channel:S.channel,preset:S.preset,cal:S.cal}));}catch(e){}
+}
+function load(){
+  try{const j=JSON.parse(localStorage.getItem(KEY)||'null'); if(!j) return;
+    for(const k of ['roi','lock','orient','flip','smooth','avg','lin','norm','channel','preset','cal']) if(j[k]!==undefined) S[k]=j[k];
+  }catch(e){}
+}
+load();
+
+// ---------- UI init ----------
+function syncUI(){
+  $('chkLock').checked=S.lock; $('selOrient').value=S.orient; $('chkFlip').checked=S.flip;
+  $('rngSmooth').value=S.smooth; $('rngAvg').value=S.avg; $('chkLin').checked=S.lin; $('chkNorm').checked=S.norm;
+  $('selChan').value=S.channel; $('selOrder').value=S.cal.order;
+  view.style.touchAction=S.lock?'auto':'none';
+}
+const selPreset=$('selPreset');
+for(const k of Object.keys(PRESETS)){const o=document.createElement('option');o.value=k;o.textContent=k;selPreset.appendChild(o);}
+if(!PRESETS[S.preset]) S.preset='Mercury lamp';
+selPreset.value=S.preset;
+syncUI();
+if(!window.isSecureContext) $('secure').hidden=false;
+
+function bind(id,ev,fn){$(id).addEventListener(ev,fn);}
+bind('chkLock','change',e=>{S.lock=e.target.checked;view.style.touchAction=S.lock?'auto':'none';save();});
+bind('selOrient','change',e=>{S.orient=e.target.value;S.ema=null;save();});
+bind('chkFlip','change',e=>{S.flip=e.target.checked;save();});
+bind('rngSmooth','input',e=>{S.smooth=+e.target.value;save();});
+bind('rngAvg','input',e=>{S.avg=+e.target.value;save();});
+bind('chkLin','change',e=>{S.lin=e.target.checked;S.ema=null;save();});
+bind('chkNorm','change',e=>{S.norm=e.target.checked;save();});
+bind('selChan','change',e=>{S.channel=e.target.value;S.ema=null;save();});
+bind('selPreset','change',e=>{S.preset=e.target.value;buildLineButtons();save();});
+bind('selOrder','change',e=>{S.cal.order=e.target.value;calFit();renderCal();save();});
+bind('btnDark','click',()=>{if(S.ema){S.dark={key:S.emaKey,vals:Float64Array.from(S.ema)};}});
+bind('btnDarkClear','click',()=>{S.dark=null;});
+bind('btnReset','click',()=>{try{localStorage.removeItem(KEY);}catch(e){} location.reload();});
+
+// ---------- camera ----------
+async function startCamera(deviceId){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){setStatus('This browser has no camera API (needs HTTPS).','bad');return;}
+  stopStream();
+  const base={width:{ideal:3840},height:{ideal:2160}};
+  const video_c=deviceId?Object.assign({deviceId:{exact:deviceId}},base):Object.assign({facingMode:{ideal:'environment'}},base);
+  try{
+    S.stream=await navigator.mediaDevices.getUserMedia({audio:false,video:video_c});
+  }catch(e){setStatus('Camera error: '+(e.name||e)+'. Check the permission for this site.','bad');return;}
+  S.track=S.stream.getVideoTracks()[0];
+  video.srcObject=S.stream; video.setAttribute('playsinline',''); video.muted=true;
+  try{await video.play();}catch(e){}
+  S.mode='live'; S.src=video; S.ema=null;
+  $('btnFreeze').disabled=false; $('btnFreeze').textContent='Freeze';
+  $('btnStart').textContent='Restart camera';
+  try{
+    const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    const sel=$('selCam'); sel.innerHTML='';
+    devs.forEach((d,i)=>{const o=document.createElement('option');o.value=d.deviceId;o.textContent=d.label||('camera '+(i+1));sel.appendChild(o);});
+    const cur=S.track.getSettings().deviceId; if(cur) sel.value=cur;
+    sel.hidden=devs.length<2;
+  }catch(e){}
+  buildCamControls();
+}
+function stopStream(){if(S.stream){S.stream.getTracks().forEach(t=>t.stop());S.stream=null;S.track=null;}}
+bind('btnStart','click',()=>startCamera());
+bind('selCam','change',e=>startCamera(e.target.value));
+bind('btnFreeze','click',()=>{
+  if(S.mode==='live'){
+    snap.width=video.videoWidth; snap.height=video.videoHeight; sctx.drawImage(video,0,0);
+    S.src=snap; S.srcW=snap.width; S.srcH=snap.height; S.mode='still'; $('btnFreeze').textContent='Resume live';
+  }else if(S.stream){S.mode='live';S.src=video;$('btnFreeze').textContent='Freeze';}
+  S.ema=null;
+});
+bind('btnLoad','click',()=>$('file').click());
+bind('file','change',e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const url=URL.createObjectURL(f), img=new Image();
+  img.onload=()=>{
+    let w=img.naturalWidth,h=img.naturalHeight; const maxPx=16e6;
+    if(w*h>maxPx){const s=Math.sqrt(maxPx/(w*h));w=Math.floor(w*s);h=Math.floor(h*s);}
+    snap.width=w;snap.height=h;sctx.drawImage(img,0,0,w,h);URL.revokeObjectURL(url);
+    S.src=snap;S.srcW=w;S.srcH=h;S.mode='still';S.ema=null;
+    $('btnFreeze').disabled=!S.stream; $('btnFreeze').textContent='Resume live';
+  };
+  img.onerror=()=>setStatus('Could not read that image.','bad');
+  img.src=url; e.target.value='';
+});
+
+function buildCamControls(){
+  const box=$('camSliders'); box.innerHTML='';
+  $('camCtl').hidden=false;
+  const track=S.track; let any=false;
+  if(track&&track.getCapabilities){
+    const caps=track.getCapabilities(), cur=track.getSettings();
+    const defs=[['exposureCompensation','exposure comp.',{}],['exposureTime','exposure time',{exposureMode:'manual'}],
+      ['iso','ISO',{exposureMode:'manual'}],['focusDistance','focus distance',{focusMode:'manual'}],
+      ['colorTemperature','white balance K',{whiteBalanceMode:'manual'}]];
+    for(const d of defs){
+      const key=d[0],c=caps[key]; if(!c||c.min===undefined||c.max===undefined) continue;
+      any=true;
+      const wrap=document.createElement('label'); wrap.appendChild(document.createTextNode(d[1]+' '));
+      const r=document.createElement('input'); r.type='range'; r.min=c.min; r.max=c.max; r.step=c.step||((c.max-c.min)/100);
+      r.value=(cur[key]!==undefined?cur[key]:c.min);
+      r.addEventListener('input',()=>{const o=Object.assign({},d[2]);o[key]=+r.value;track.applyConstraints({advanced:[o]}).catch(()=>{});});
+      wrap.appendChild(r); box.appendChild(wrap);
+    }
+  }
+  $('camNote').hidden=any;
+}
+
+// ---------- region selection ----------
+let drag=null;
+function vpos(e){const r=view.getBoundingClientRect();return{x:clamp((e.clientX-r.left)/r.width,0,1),y:clamp((e.clientY-r.top)/r.height,0,1)};}
+function setRoi(x0,y0,x1,y1){S.roi={x:Math.min(x0,x1),y:Math.min(y0,y1),w:Math.abs(x1-x0),h:Math.abs(y1-y0)};S.ema=null;}
+view.addEventListener('pointerdown',e=>{if(S.lock||!S.src)return;view.setPointerCapture(e.pointerId);const p=vpos(e);drag={x:p.x,y:p.y};setRoi(p.x,p.y,p.x,p.y);});
+view.addEventListener('pointermove',e=>{if(!drag)return;const p=vpos(e);setRoi(drag.x,drag.y,p.x,p.y);});
+view.addEventListener('pointerup',()=>{if(drag){drag=null;save();}});
+
+// ---------- extraction ----------
+function compute(){
+  const sw=S.srcW,sh=S.srcH; if(!sw||!sh){S.spec=null;return;}
+  let rx=Math.max(0,Math.round(S.roi.x*sw)), ry=Math.max(0,Math.round(S.roi.y*sh));
+  let rw=Math.round(S.roi.w*sw), rh=Math.round(S.roi.h*sh);
+  rw=Math.min(rw,sw-rx); rh=Math.min(rh,sh-ry);
+  if(rw<6||rh<6){S.spec=null;return;}
+  if(off.width!==rw||off.height!==rh){off.width=rw;off.height=rh;}
+  octx.drawImage(S.src,rx,ry,rw,rh,0,0,rw,rh);
+  const d=octx.getImageData(0,0,rw,rh).data;
+  const vertical=S.orient==='vertical'||(S.orient==='auto'&&rh>=rw);
+  const n=vertical?rh:rw, m=vertical?rw:rh, start=vertical?ry:rx;
+  const acc=new Float64Array(n); let sat=0; const lut=S.lin?LIN:ID, ch=S.channel;
+  for(let y=0;y<rh;y++){
+    for(let x=0;x<rw;x++){
+      const i=(y*rw+x)*4, r=d[i],g=d[i+1],b=d[i+2];
+      if(r>=250||g>=250||b>=250) sat++;
+      let v; if(ch==='sum') v=lut[r]+lut[g]+lut[b]; else if(ch==='max') v=lut[Math.max(r,g,b)]; else v=lut[g];
+      acc[vertical?y:x]+=v;
+    }
+  }
+  for(let i=0;i<n;i++) acc[i]/=m;
+  S.satFrac=sat/(rw*rh);
+  const key=[n,start,vertical,sw,sh,ch,S.lin].join();
+  const a=1/Math.max(1,S.avg);
+  if(!S.ema||S.emaKey!==key||S.ema.length!==n){S.ema=Float64Array.from(acc);S.emaKey=key;}
+  else for(let i=0;i<n;i++) S.ema[i]+=a*(acc[i]-S.ema[i]);
+  const dk=(S.dark&&S.dark.key===key)?S.dark.vals:null;
+  const xs=new Float64Array(n), raw=new Float64Array(n);
+  for(let i=0;i<n;i++){const j=S.flip?n-1-i:i; xs[i]=start+j+0.5; raw[i]=S.ema[j]-(dk?dk[j]:0);}
+  const ys=smoothArr(raw,S.smooth);
+  let mx=-Infinity,mn=Infinity; for(let i=0;i<n;i++){if(ys[i]>mx)mx=ys[i];if(ys[i]<mn)mn=ys[i];}
+  if(S.norm&&mx>0){for(let i=0;i<n;i++)ys[i]/=mx; mn/=mx; mx=1;}
+  const peaks=findPeaks(ys);
+  for(const p of peaks){
+    const i0=clamp(Math.floor(p.pos),0,n-2), fr=p.pos-i0;
+    p.xabs=xs[i0]+fr*(xs[i0+1]-xs[i0]);
+  }
+  S.spec={xs:xs,ys:ys,n:n,vertical:vertical,start:start,ymax:mx,ymin:mn,peaks:peaks,axisLen:vertical?sh:sw,rw:rw,rh:rh};
+}
+
+// ---------- calibration ----------
+function axisScale(){return (S.cal.axisLen&&S.spec)?S.cal.axisLen/S.spec.axisLen:1;}
+function toCal(xabs){return xabs*axisScale();}
+function nmAt(xabs){return S.fit?polyval(S.fit,xabs*axisScale()):null;}
+function calOk(){return !!(S.fit&&S.spec&&S.cal.vertical===S.spec.vertical);}
+function calFit(){
+  const p=S.cal.pts; S.fit=null;S.fitDeg=0; if(p.length<2) return;
+  let deg=S.cal.order==='auto'?(p.length>=3?2:1):+S.cal.order;
+  deg=Math.min(deg,p.length-1,3);
+  S.fit=polyfit(p.map(q=>q.x),p.map(q=>q.nm),deg); S.fitDeg=deg;
+}
+function updatePending(){
+  const el=$('pending');
+  if(!S.pending){el.textContent='No line selected. Tap a line on the plot.';return;}
+  let t='Selected position '+S.pending.xabs.toFixed(1)+' px';
+  if(calOk()) t+=' (currently reads '+nmAt(S.pending.xabs).toFixed(1)+' nm)';
+  el.textContent=t+'. Which line is it?';
+}
+function buildLineButtons(){
+  const box=$('lineBtns'); box.innerHTML='';
+  for(const l of PRESETS[S.preset]){
+    const b=document.createElement('button'); b.textContent=l[0]+' nm'; b.addEventListener('click',()=>addPoint(l[0])); box.appendChild(b);
+  }
+}
+function addPoint(nm){
+  if(!S.pending||!(nm>0)) {$('pending').textContent='Tap a line on the plot first.';return;}
+  if(!S.cal.pts.length||S.cal.vertical!==S.spec.vertical||!S.cal.axisLen){S.cal.pts=[];S.cal.axisLen=S.spec.axisLen;S.cal.vertical=S.spec.vertical;}
+  const x=toCal(S.pending.xabs);
+  S.cal.pts=S.cal.pts.filter(p=>p.nm!==nm).concat([{x:x,nm:nm}]).sort((a,b)=>a.x-b.x);
+  S.pending=null; calFit(); renderCal(); updatePending(); save();
+}
+bind('btnAddNm','click',()=>{const v=parseFloat($('numNm').value);addPoint(v);});
+bind('btnCalClear','click',()=>{S.cal.pts=[];S.cal.axisLen=0;S.fit=null;renderCal();updatePending();save();});
+function renderCal(){
+  const t=$('calTable'); t.innerHTML='';
+  if(!S.cal.pts.length){$('calInfo').textContent='Not calibrated: the plot shows pixels.';return;}
+  const head=document.createElement('tr'); head.innerHTML='<th>pixel</th><th>nm</th><th>error</th><th></th>'; t.appendChild(head);
+  let ss=0;
+  S.cal.pts.forEach((p,i)=>{
+    const err=S.fit?polyval(S.fit,p.x)-p.nm:NaN; if(!isNaN(err)) ss+=err*err;
+    const tr=document.createElement('tr');
+    tr.innerHTML='<td>'+p.x.toFixed(1)+'</td><td>'+p.nm.toFixed(1)+'</td><td>'+(isNaN(err)?'':err.toFixed(2))+'</td><td></td>';
+    const b=document.createElement('button'); b.textContent='×'; b.addEventListener('click',()=>{S.cal.pts.splice(i,1);calFit();renderCal();save();});
+    tr.lastChild.appendChild(b); t.appendChild(tr);
+  });
+  const n=S.cal.pts.length;
+  $('calInfo').textContent=S.fit?('fit: order '+S.fitDeg+', rms error '+Math.sqrt(ss/n).toFixed(2)+' nm'+(n<3?' (add a third point for a curved fit)':'')):'Add at least two points.';
+}
+calFit(); renderCal(); buildLineButtons(); updatePending();
+
+// ---------- drawing ----------
+function setStatus(t,cls){const el=$('status');el.textContent=t;el.className='small '+(cls||'');}
+
+function drawView(){
+  const w=S.srcW,h=S.srcH; if(!w||!h) return;
+  const cw=Math.min(w,900), chh=Math.round(cw*h/w);
+  if(view.width!==cw||view.height!==chh){view.width=cw;view.height=chh;}
+  vctx.drawImage(S.src,0,0,cw,chh);
+  const r=S.roi; vctx.lineWidth=2; vctx.strokeStyle='#ffd54a';
+  vctx.strokeRect(r.x*cw,r.y*chh,r.w*cw,r.h*chh);
+}
+
+function drawPlot(){
+  const dpr=window.devicePixelRatio||1, W=plot.clientWidth, H=plot.clientHeight;
+  const cw=Math.round(W*dpr), chh=Math.round(H*dpr);
+  if(plot.width!==cw||plot.height!==chh){plot.width=cw;plot.height=chh;}
+  const c=pctx; c.setTransform(dpr,0,0,dpr,0,0);
+  c.fillStyle='#0b0d11'; c.fillRect(0,0,W,H);
+  const sp=S.spec;
+  if(!sp){c.fillStyle='#9aa4b2';c.font='13px system-ui';c.fillText('No spectrum yet: start the camera and box the rainbow.',12,24);S.plotInfo=null;return;}
+  const L=44,R=10,T=12,B=26, pw=W-L-R, ph=H-T-B, n=sp.n;
+  const cal=calOk();
+  const dx=new Float64Array(n); for(let i=0;i<n;i++) dx[i]=cal?nmAt(sp.xs[i]):sp.xs[i];
+  const xmin=Math.min(dx[0],dx[n-1]), xmax=Math.max(dx[0],dx[n-1]);
+  if(!(xmax>xmin)){return;}
+  const X=v=>L+(v-xmin)/(xmax-xmin)*pw;
+  const ymax=(S.norm?1:Math.max(sp.ymax,1e-6))*1.06, ymin=Math.min(0,sp.ymin*1.05);
+  const Y=v=>T+ph-(v-ymin)/(ymax-ymin)*ph;
+  c.font='11px system-ui'; c.textBaseline='alphabetic';
+  // grid
+  const xs=niceStep(xmax-xmin,7); c.strokeStyle='#1f2630'; c.fillStyle='#9aa4b2'; c.lineWidth=1;
+  for(let v=Math.ceil(xmin/xs)*xs; v<=xmax; v+=xs){const x=Math.round(X(v))+0.5;c.beginPath();c.moveTo(x,T);c.lineTo(x,T+ph);c.stroke();c.fillText(String(Math.round(v*100)/100),x-10,H-8);}
+  const ys_=niceStep(ymax-ymin,4);
+  for(let v=Math.ceil(ymin/ys_)*ys_; v<=ymax; v+=ys_){const y=Math.round(Y(v))+0.5;c.beginPath();c.moveTo(L,y);c.lineTo(L+pw,y);c.stroke();c.fillText(S.norm?v.toFixed(1):v.toFixed(2),4,y+4);}
+  c.fillText(cal?'wavelength, nm':'pixel along the spectrum',L+pw-110,H-8);
+  // reference lines of the chosen lamp
+  if(cal){
+    c.setLineDash([3,4]);c.strokeStyle='#5b6675';
+    for(const l of PRESETS[S.preset]){const v=l[0]; if(v<xmin||v>xmax) continue; const x=X(v);c.beginPath();c.moveTo(x,T+14);c.lineTo(x,T+ph);c.stroke();c.fillStyle='#7d8897';c.fillText(String(Math.round(v)),x+2,T+10);}
+    c.setLineDash([]);
+  }
+  // spectrum fill + line
+  for(let i=0;i<n-1;i++){
+    const y0=Y(Math.max(0,sp.ys[i])), base=Y(0);
+    const x0=X(dx[i]), x1=X(dx[i+1]); const wdt=Math.abs(x1-x0)+0.8;
+    if(cal){const rgb=wl2rgb(dx[i]);c.fillStyle='rgba('+rgb[0]+','+rgb[1]+','+rgb[2]+',0.55)';}else c.fillStyle='rgba(150,170,200,0.35)';
+    c.fillRect(Math.min(x0,x1),y0,wdt,base-y0);
+  }
+  c.strokeStyle='#ffffff'; c.lineWidth=1.4; c.beginPath();
+  for(let i=0;i<n;i++){const x=X(dx[i]),y=Y(sp.ys[i]); if(i)c.lineTo(x,y); else c.moveTo(x,y);} c.stroke();
+  // peaks
+  const placed=[]; const order=sp.peaks.slice().sort((a,b)=>b.y-a.y).slice(0,16);
+  c.fillStyle='#ffd54a'; c.strokeStyle='#ffd54a';
+  for(const p of order){
+    p.xv=cal?nmAt(p.xabs):p.xabs;
+    const x=X(p.xv), y=Y(p.y);
+    c.beginPath();c.arc(x,y,2.5,0,6.283);c.fill();
+    if(placed.every(q=>Math.abs(q-x)>30)){placed.push(x);c.fillText(cal?p.xv.toFixed(1):p.xabs.toFixed(0),x-12,Math.max(T+22,y-8));}
+  }
+  for(const p of sp.peaks) if(p.xv===undefined) p.xv=cal?nmAt(p.xabs):p.xabs;
+  // pending marker
+  if(S.pending){
+    const v=cal?nmAt(S.pending.xabs):S.pending.xabs;
+    if(v>=xmin&&v<=xmax){c.strokeStyle='#4cc2ff';c.lineWidth=1.5;const x=X(v);c.beginPath();c.moveTo(x,T);c.lineTo(x,T+ph);c.stroke();}
+  }
+  S.plotInfo={L:L,pw:pw,xmin:xmin,xmax:xmax,X:X,dx:dx,cal:cal};
+}
+
+plot.addEventListener('pointerdown',e=>{
+  const sp=S.spec,info=S.plotInfo; if(!sp||!info) return;
+  const r=plot.getBoundingClientRect(), px=e.clientX-r.left;
+  const xv=info.xmin+(px-info.L)/info.pw*(info.xmax-info.xmin);
+  let best=null,bd=1e9;
+  for(const p of sp.peaks){if(p.xv===undefined)continue;const dd=Math.abs(info.X(p.xv)-px);if(dd<bd){bd=dd;best=p;}}
+  let xabs;
+  if(best&&bd<16) xabs=best.xabs;
+  else{let bi=0,bv=1e18;for(let i=0;i<sp.n;i++){const dv=Math.abs(info.dx[i]-xv);if(dv<bv){bv=dv;bi=i;}} xabs=sp.xs[bi];}
+  S.pending={xabs:xabs}; updatePending();
+});
+plot.addEventListener('pointermove',e=>{
+  const sp=S.spec,info=S.plotInfo; if(!sp||!info) return;
+  const r=plot.getBoundingClientRect(), px=e.clientX-r.left;
+  const xv=info.xmin+(px-info.L)/info.pw*(info.xmax-info.xmin);
+  let bi=0,bv=1e18;for(let i=0;i<sp.n;i++){const dv=Math.abs(info.dx[i]-xv);if(dv<bv){bv=dv;bi=i;}}
+  $('readout').textContent=(info.cal?xv.toFixed(1)+' nm':'pixel '+sp.xs[bi].toFixed(0))+'   intensity '+sp.ys[bi].toFixed(3);
+});
+
+// ---------- export ----------
+function download(name,blob){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000);}
+bind('btnCsv','click',()=>{
+  const sp=S.spec; if(!sp) return; const cal=calOk(); let out='pixel,wavelength_nm,intensity\n';
+  for(let i=0;i<sp.n;i++) out+=sp.xs[i].toFixed(1)+','+(cal?nmAt(sp.xs[i]).toFixed(2):'')+','+sp.ys[i].toFixed(6)+'\n';
+  download('spectrum.csv',new Blob([out],{type:'text/csv'}));
+});
+bind('btnPng','click',()=>{plot.toBlob(b=>{if(b)download('spectrum.png',b);});});
+
+// ---------- main loop ----------
+let last=0;
+function loop(t){
+  requestAnimationFrame(loop);
+  if(!S.src) return;
+  if(S.mode==='live'){
+    if(video.readyState<2||!video.videoWidth) return;
+    S.srcW=video.videoWidth; S.srcH=video.videoHeight;
+  }
+  drawView();
+  if(t-last>60){
+    last=t; compute();
+    const sp=S.spec;
+    if(sp){
+      const satPct=(S.satFrac*100).toFixed(1);
+      let txt=S.srcW+'×'+S.srcH+(S.mode==='live'?' live':' still')+' | region '+sp.rw+'×'+sp.rh+' px, axis '+(sp.vertical?'vertical':'horizontal')+' | clipped '+satPct+'%';
+      let cls='';
+      if(S.satFrac>0.02){txt+=' (too bright: lower the exposure or lamp)';cls='warn';}
+      if(S.cal.pts.length&&S.spec&&S.cal.vertical!==sp.vertical){txt+=' | calibration is for the other axis';cls='warn';}
+      setStatus(txt,cls);
+    }
+  }
+  drawPlot();
+}
+requestAnimationFrame(loop);
+window.addEventListener('beforeunload',stopStream);
+})();
+</script>
+</body>
+</html>
