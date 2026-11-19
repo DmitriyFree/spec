@@ -94,6 +94,7 @@ td button{height:24px;padding:0 8px}
       <div class="row">
         <label><input type="checkbox" id="chkLin" checked> linearize</label>
         <label><input type="checkbox" id="chkNorm" checked> normalize</label>
+        <label><input type="checkbox" id="chkTrim" checked> tight crop</label>
         <label>channel <select id="selChan"><option value="sum">R+G+B</option><option value="max">max</option><option value="g">green</option></select></label>
       </div>
       <div class="row"><button id="btnDark">Store dark</button><button id="btnDarkClear">Clear dark</button></div>
@@ -319,18 +320,18 @@ const KEY='spectro.v2';
 const S={
   src:null,srcW:0,srcH:0,mode:'none',
   roi:{x:0.35,y:0.4,w:0.3,h:0.25}, roiSet:false, orient:'auto', flip:false,
-  smooth:2, avg:4, lin:true, norm:true, channel:'sum', preset:'Mercury lamp', custom:[], dirMode:'auto',
+  smooth:2, avg:4, lin:true, norm:true, channel:'sum', preset:'Mercury lamp', custom:[], dirMode:'auto', camId:'', trim:true, sdEma:null, sdKey:'',
   cal:{pts:[],order:'auto',axisLen:0,vertical:true}, prevCal:null,
   fit:null, fitDeg:0, ema:null, emaKey:'', dark:null, spec:null, satFrac:0,
   pending:null, stream:null, track:null, plotInfo:null, msg:'', msgUntil:0, baseStatus:'', baseCls:'', aim:false
 };
 function save(){
   try{localStorage.setItem(KEY,JSON.stringify({roi:S.roi,roiSet:S.roiSet,orient:S.orient,flip:S.flip,smooth:S.smooth,avg:S.avg,
-    lin:S.lin,norm:S.norm,channel:S.channel,preset:S.preset,custom:S.custom,dirMode:S.dirMode,cal:S.cal}));}catch(e){}
+    lin:S.lin,norm:S.norm,channel:S.channel,preset:S.preset,custom:S.custom,dirMode:S.dirMode,camId:S.camId,trim:S.trim,cal:S.cal}));}catch(e){}
 }
 (function load(){
   try{const j=JSON.parse(localStorage.getItem(KEY)||'null'); if(!j) return;
-    for(const k of ['roi','roiSet','orient','flip','smooth','avg','lin','norm','channel','preset','custom','dirMode','cal']) if(j[k]!==undefined) S[k]=j[k];
+    for(const k of ['roi','roiSet','orient','flip','smooth','avg','lin','norm','channel','preset','custom','dirMode','camId','trim','cal']) if(j[k]!==undefined) S[k]=j[k];
   }catch(e){}
 })();
 if(!PRESETS[S.preset]) S.preset='Mercury lamp';
@@ -348,7 +349,7 @@ for(const k of Object.keys(PRESETS)){const o=document.createElement('option');o.
 function syncUI(){
   selPreset.value=S.preset; $('selOrient').value=S.orient; $('chkFlip').checked=S.flip;
   $('rngSmooth').value=S.smooth; $('rngAvg').value=S.avg; $('chkLin').checked=S.lin; $('chkNorm').checked=S.norm;
-  $('selChan').value=S.channel; $('selOrder').value=S.cal.order; $('selDir').value=S.dirMode;
+  $('chkTrim').checked=S.trim; $('selChan').value=S.channel; $('selOrder').value=S.cal.order; $('selDir').value=S.dirMode;
 }
 syncUI();
 function bind(id,ev,fn){$(id).addEventListener(ev,fn);}
@@ -358,6 +359,7 @@ bind('rngSmooth','input',e=>{S.smooth=+e.target.value;save();});
 bind('rngAvg','input',e=>{S.avg=+e.target.value;save();});
 bind('chkLin','change',e=>{S.lin=e.target.checked;S.ema=null;save();});
 bind('chkNorm','change',e=>{S.norm=e.target.checked;save();});
+bind('chkTrim','change',e=>{S.trim=e.target.checked;S.ema=null;S.sdEma=null;save();});
 bind('selChan','change',e=>{S.channel=e.target.value;S.ema=null;save();});
 bind('selOrder','change',e=>{S.cal.order=e.target.value;calFit();renderCal();save();});
 bind('selDir','change',e=>{S.dirMode=e.target.value;save();});
@@ -383,31 +385,45 @@ function openAim(){if(!S.src){flash('Start the camera or load a photo first.','w
 function closeAim(){S.aim=false;$('aim').hidden=true;save();}
 
 // ---------- camera ----------
-async function startCamera(deviceId){
+async function startCamera(deviceId,userChosen){
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){flash('No camera API: the page must be served over HTTPS.','bad');return;}
   stopStream();
   const base={width:{ideal:3840},height:{ideal:2160}};
-  const vc=deviceId?Object.assign({deviceId:{exact:deviceId}},base):Object.assign({facingMode:{ideal:'environment'}},base);
-  try{S.stream=await navigator.mediaDevices.getUserMedia({audio:false,video:vc});}
-  catch(e){flash('Camera error: '+(e.name||e)+'. Check this site’s camera permission.','bad');return;}
-  S.track=S.stream.getVideoTracks()[0];
+  const open=c=>navigator.mediaDevices.getUserMedia({audio:false,video:c});
+  const byId=id=>open(Object.assign({deviceId:{exact:id}},base));
+  const byFacing=()=>open(Object.assign({facingMode:{ideal:'environment'}},base));
+  let stream=null, wantId=deviceId||S.camId||'';
+  if(wantId){try{stream=await byId(wantId);}catch(e){stream=null; if(!userChosen) S.camId='';}}
+  if(!stream){
+    try{stream=await byFacing();}
+    catch(e){flash('Camera error: '+(e.name||e)+'. Check this site’s camera permission.','bad');return;}
+  }
+  if(userChosen&&deviceId){S.camId=deviceId;save();}
+  let devs=[]; try{devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');}catch(e){}
+  let curId=(stream.getVideoTracks()[0].getSettings()||{}).deviceId||wantId;
+  if(!S.camId){   // no explicit choice yet: the ultra-wide camera is the default
+    const uw=devs.find(d=>/ultra/i.test(d.label));
+    if(uw&&uw.deviceId!==curId){
+      stream.getTracks().forEach(t=>t.stop());
+      try{stream=await byId(uw.deviceId);curId=uw.deviceId;S.camId=uw.deviceId;save();}
+      catch(e){try{stream=await byFacing();}catch(e2){flash('Camera error: '+(e2.name||e2),'bad');return;}}
+    }else if(uw){S.camId=uw.deviceId;save();}
+  }
+  S.stream=stream; S.track=stream.getVideoTracks()[0];
   video.srcObject=S.stream; video.setAttribute('playsinline',''); video.muted=true;
   try{await video.play();}catch(e){}
-  S.mode='live'; S.src=video; S.ema=null;
+  S.mode='live'; S.src=video; S.ema=null; S.sdEma=null;
   $('btnFreeze').disabled=false; $('btnFreeze').textContent='Freeze'; $('btnStart').textContent='Restart';
-  try{
-    const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
-    const sel=$('selCam'); sel.innerHTML='';
-    devs.forEach((d,i)=>{const o=document.createElement('option');o.value=d.deviceId;o.textContent=d.label||('camera '+(i+1));sel.appendChild(o);});
-    const cur=S.track.getSettings().deviceId; if(cur) sel.value=cur;
-    sel.hidden=devs.length<2;
-  }catch(e){}
+  const sel=$('selCam'); sel.innerHTML='';
+  devs.forEach((d,i)=>{const o=document.createElement('option');o.value=d.deviceId;o.textContent=d.label||('camera '+(i+1));sel.appendChild(o);});
+  const cur=(S.track.getSettings()||{}).deviceId||curId; if(cur) sel.value=cur;
+  sel.hidden=devs.length<2;
   buildCamControls();
   if(!S.roiSet) openAim();
 }
 function stopStream(){if(S.stream){S.stream.getTracks().forEach(t=>t.stop());S.stream=null;S.track=null;}}
 bind('btnStart','click',()=>startCamera());
-bind('selCam','change',e=>startCamera(e.target.value));
+bind('selCam','change',e=>startCamera(e.target.value,true));
 bind('btnFreeze','click',()=>{
   if(S.mode==='live'){
     snap.width=video.videoWidth; snap.height=video.videoHeight; sctx.drawImage(video,0,0);
@@ -475,18 +491,33 @@ function compute(){
   const d=octx.getImageData(0,0,rw,rh).data;
   const vertical=S.orient==='vertical'||(S.orient==='auto'&&rh>=rw);
   const n=vertical?rh:rw, m=vertical?rw:rh, start=vertical?ry:rx;
+  const lut=S.lin?LIN:ID, ch=S.channel;
+  // tight crop: columns (rows) that carry spectral lines vary strongly along the spectrum; glowing walls and frame edges do not
+  let c0=0,c1=m-1;
+  if(S.trim){
+    const gk=[rw,rh,vertical,sw,sh].join();
+    const sx=new Float64Array(m), sxx=new Float64Array(m);
+    for(let y=0;y<rh;y++){for(let x=0;x<rw;x++){const i=(y*rw+x)*4,v=lut[d[i]]+lut[d[i+1]]+lut[d[i+2]],c=vertical?x:y;sx[c]+=v;sxx[c]+=v*v;}}
+    const sd=new Float64Array(m); for(let c=0;c<m;c++){const mu=sx[c]/n;sd[c]=Math.sqrt(Math.max(0,sxx[c]/n-mu*mu));}
+    if(!S.sdEma||S.sdKey!==gk||S.sdEma.length!==m){S.sdEma=Float64Array.from(sd);S.sdKey=gk;} else for(let c=0;c<m;c++) S.sdEma[c]+=0.15*(sd[c]-S.sdEma[c]);
+    const sm=smoothArr(S.sdEma,1); let mi=0; for(let c=1;c<m;c++) if(sm[c]>sm[mi]) mi=c;
+    const th=0.3*sm[mi]; let a=mi,b=mi; while(a>0&&sm[a-1]>=th) a--; while(b<m-1&&sm[b+1]>=th) b++;
+    if(b-a+1>=4){c0=Math.max(0,a-1);c1=Math.min(m-1,b+1);}
+  }
+  const mc=c1-c0+1;
   const acc=new Float64Array(n), aR=new Float64Array(n), aB=new Float64Array(n), aS=new Float64Array(n);
-  let sat=0; const lut=S.lin?LIN:ID, ch=S.channel;
+  let sat=0;
   for(let y=0;y<rh;y++){
     for(let x=0;x<rw;x++){
+      const c=vertical?x:y; if(c<c0||c>c1) continue;
       const i=(y*rw+x)*4, r=d[i],g=d[i+1],b=d[i+2], k=vertical?y:x;
       if(r>=250||g>=250||b>=250) sat++;
       let v; if(ch==='sum') v=lut[r]+lut[g]+lut[b]; else if(ch==='max') v=lut[Math.max(r,g,b)]; else v=lut[g];
       acc[k]+=v; aR[k]+=r; aB[k]+=b; aS[k]+=r+g+b;
     }
   }
-  for(let i=0;i<n;i++){acc[i]/=m;aR[i]/=m;aB[i]/=m;aS[i]/=(3*m);}
-  S.satFrac=sat/(rw*rh);
+  for(let i=0;i<n;i++){acc[i]/=mc;aR[i]/=mc;aB[i]/=mc;aS[i]/=(3*mc);}
+  S.satFrac=sat/(n*mc);
   const key=[n,start,vertical,sw,sh,ch,S.lin].join();
   const a=1/Math.max(1,S.avg);
   if(!S.ema||S.emaKey!==key||S.ema.length!==n){S.ema=Float64Array.from(acc);S.emaKey=key;}
@@ -502,7 +533,7 @@ function compute(){
     const i0=clamp(Math.floor(p.pos),0,n-2), fr=p.pos-i0;
     p.xabs=xs[i0]+fr*(xs[i0+1]-xs[i0]);
   }
-  S.spec={raw:raw,xs:xs,ys:ys,n:n,vertical:vertical,start:start,ymax:mx,ymin:mn,peaks:peaks,axisLen:vertical?sh:sw,rw:rw,rh:rh,cr:cr,cb:cb,br:br,flip:S.flip};
+  S.spec={raw:raw,xs:xs,ys:ys,n:n,vertical:vertical,start:start,ymax:mx,ymin:mn,peaks:peaks,axisLen:vertical?sh:sw,rw:rw,rh:rh,c0:c0,mc:mc,pix:d,cr:cr,cb:cb,br:br,flip:S.flip};
 }
 
 // ---------- calibration ----------
@@ -594,8 +625,30 @@ function drawView(){
   vctx.strokeRect(r.x*cw,r.y*chh,r.w*cw,r.h*chh);
 }
 function nearestRef(nm,tol){
-  let best=null,bd=1e9; for(const r of refsManual()){const d=Math.abs(r-nm); if(d<bd){bd=d;best=r;}}
-  return bd<=tol?best:null;
+  // prefer the lines used for matching (the yellow doublet counts as one line), then the full list
+  for(const list of [refsAuto().map(r=>r.nm),refsManual()]){
+    let best=null,bd=1e9; for(const r of list){const d=Math.abs(r-nm); if(d<bd){bd=d;best=r;}}
+    if(bd<=tol) return best;
+  }
+  return null;
+}
+const bandCv=document.createElement('canvas'), bandCtx=bandCv.getContext('2d');
+// live crop of the region, resampled so it lines up with the plot's x axis (smooth between samples)
+function drawBand(c,sp,dx,L,T,pw,bandH,xmin,xmax){
+  const bw=Math.max(8,Math.round(pw)), bh=sp.mc, n=sp.n, d=sp.pix, rw=sp.rw, inc=dx[n-1]>=dx[0];
+  if(bandCv.width!==bw||bandCv.height!==bh){bandCv.width=bw;bandCv.height=bh;}
+  const img=bandCtx.createImageData(bw,bh), o=img.data;
+  for(let px=0;px<bw;px++){
+    const xv=xmin+(px+0.5)/bw*(xmax-xmin);
+    let lo=0,hi=n-1; while(hi-lo>1){const mid=(lo+hi)>>1; if((dx[mid]<=xv)===inc) lo=mid; else hi=mid;}
+    let f=(xv-dx[lo])/((dx[hi]-dx[lo])||1); f=Math.min(1,Math.max(0,f));
+    const j0=sp.flip?n-1-lo:lo, j1=sp.flip?n-1-hi:hi;
+    for(let cc=0;cc<bh;cc++){
+      const k=sp.c0+cc, i0=(sp.vertical?j0*rw+k:k*rw+j0)*4, i1=(sp.vertical?j1*rw+k:k*rw+j1)*4, q=(cc*bw+px)*4;
+      o[q]=d[i0]+(d[i1]-d[i0])*f; o[q+1]=d[i0+1]+(d[i1+1]-d[i0+1])*f; o[q+2]=d[i0+2]+(d[i1+2]-d[i0+2])*f; o[q+3]=255;
+    }
+  }
+  bandCtx.putImageData(img,0,0); c.imageSmoothingEnabled=true; c.drawImage(bandCv,0,0,bw,bh,L,T,pw,bandH);
 }
 function drawPlot(){
   const dpr=window.devicePixelRatio||1, W=plot.clientWidth, H=plot.clientHeight;
@@ -606,7 +659,7 @@ function drawPlot(){
   c.fillStyle='#0b0d11'; c.fillRect(0,0,W,H);
   const sp=S.spec;
   if(!sp){c.fillStyle='#9aa4b2';c.font='13px system-ui';c.fillText('Press Start, then Region to box the rainbow.',10,22);S.plotInfo=null;return;}
-  const L=34,R=6,T=5,B=18, bandH=(H>230?36:0), gT=T+bandH+(bandH?4:0);
+  const L=34,R=6,T=5,B=18, bandH=Math.round(H*0.47), gT=T+bandH+6;
   const pw=W-L-R, ph=H-gT-B, n=sp.n;
   const cal=calOk();
   const dx=new Float64Array(n); for(let i=0;i<n;i++) dx[i]=cal?nmAt(sp.xs[i]):sp.xs[i];
@@ -617,12 +670,9 @@ function drawPlot(){
   if(bandH){
     c.fillStyle='#000'; c.fillRect(L,T,pw,bandH);
     c.imageSmoothingEnabled=true;
-    for(let i=0;i<n;i++){
-      const j=sp.flip?n-1-i:i, x0=X(dx[i]), x1=X(dx[i<n-1?i+1:i-1]);
-      const wd=Math.abs(x1-x0)+0.7, xl=Math.min(x0,x1);
-      if(sp.vertical) c.drawImage(off,0,j,sp.rw,1,xl,T,wd,bandH); else c.drawImage(off,j,0,1,sp.rh,xl,T,wd,bandH);
-    }
+    drawBand(c,sp,dx,L,T,pw,bandH,xmin,xmax);
     c.strokeStyle='#2a313c'; c.lineWidth=1; c.strokeRect(L+0.5,T+0.5,pw-1,bandH-1);
+    c.fillStyle='#9aa4b2'; c.font='10px system-ui'; c.fillText('live',3,T+11);
   }
   const ymax=(S.norm?1:Math.max(sp.ymax,1e-6))*1.08, ymin=Math.min(0,sp.ymin*1.05);
   const Y=v=>gT+ph-(v-ymin)/(ymax-ymin)*ph;
