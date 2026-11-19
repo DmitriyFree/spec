@@ -2,48 +2,76 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>Phone spectrometer</title>
 <style>
-:root{--bg:#0e1116;--panel:#171b22;--line:#2a313c;--fg:#e6e9ee;--mut:#9aa4b2;--acc:#4cc2ff;--warn:#ffb454;--bad:#ff6b6b}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  padding:max(10px,env(safe-area-inset-top)) 10px 40px}
-h1{font-size:18px;margin:6px 0 4px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;margin:10px 0}
-canvas{width:100%;display:block;border-radius:6px;background:#000}
-#view{touch-action:none;cursor:crosshair}
-#video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
-button,select,input[type=number]{font:inherit;color:var(--fg);background:#222a35;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+:root{--bg:#0e1116;--panel:#171b22;--line:#2a313c;--fg:#e6e9ee;--mut:#9aa4b2;--acc:#4cc2ff;--warn:#ffb454;--bad:#ff6b6b;--ok:#5be39a}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none !important}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
+  font:13px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+#app{height:100vh;height:100dvh;display:flex;flex-direction:column;gap:5px;
+  padding:max(6px,env(safe-area-inset-top)) 6px max(6px,env(safe-area-inset-bottom))}
+#bar,.row{display:flex;gap:5px;align-items:center}
+.row{flex-wrap:wrap}
+#bar>*{flex:0 0 auto}
+button,select,input[type=number]{font:inherit;color:var(--fg);background:#222a35;border:1px solid var(--line);border-radius:8px;padding:0 9px;height:34px}
 button.primary{background:var(--acc);color:#001a26;border-color:var(--acc);font-weight:600}
+button:disabled{opacity:.4}
 button:active{filter:brightness(1.25)}
-button:disabled{opacity:.45}
-.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+#selPreset{flex:1 1 auto;min-width:0}
+#plotWrap{flex:1;min-height:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#0b0d11}
+#plot{width:100%;height:100%;display:block}
+#status{height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--mut);font-size:11.5px}
+#foot{flex:0 0 auto}
+#actions{flex-wrap:nowrap}
+#actions button{flex:1 1 0;padding:0 4px;min-width:0}
+#chips{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}
+#chips button{flex:0 0 auto}
+.overlay{position:fixed;inset:0;background:var(--bg);z-index:10;display:flex;flex-direction:column;gap:6px;
+  padding:max(8px,env(safe-area-inset-top)) 8px max(8px,env(safe-area-inset-bottom))}
+#view{flex:1;min-height:0;width:100%;object-fit:contain;touch-action:none;background:#000;border-radius:6px}
+.sheetHead{display:flex;justify-content:space-between;align-items:center}
+.sheetBody{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.sec{border-top:1px solid var(--line);padding:8px 0}
+.sec h3{margin:0 0 6px;font-size:11.5px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 label{color:var(--mut);display:flex;gap:6px;align-items:center}
 .small{color:var(--mut);font-size:12px}
-.warn{color:var(--warn)} .bad{color:var(--bad)}
+.warn{color:var(--warn)} .bad{color:var(--bad)} .ok{color:var(--ok)}
 table{width:100%;border-collapse:collapse}
-td,th{padding:4px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;font-variant-numeric:tabular-nums}
+td,th{padding:3px 4px;border-bottom:1px solid var(--line);text-align:left;font-size:12px;font-variant-numeric:tabular-nums}
+td button{height:24px;padding:0 8px}
+#video{position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none}
 </style>
 </head>
 <body>
-<h1>Phone spectrometer</h1>
-<div class="small" id="status">Press “Start camera”, or load a photo.</div>
-<div class="small warn" id="secure" hidden>The browser only gives the camera to pages served over HTTPS (or localhost).</div>
-
-<div class="panel">
-  <div class="row">
-    <button class="primary" id="btnStart">Start camera</button>
-    <select id="selCam" hidden></select>
+<div id="app">
+  <div id="bar">
+    <button class="primary" id="btnStart">Start</button>
     <button id="btnFreeze" disabled>Freeze</button>
-    <button id="btnLoad">Load photo</button>
-    <input type="file" id="file" accept="image/*" hidden>
+    <button id="btnRegion">Region</button>
+    <select id="selPreset" aria-label="lamp"></select>
+    <button id="btnMore" aria-label="settings">&#8943;</button>
   </div>
+  <div id="plotWrap"><canvas id="plot"></canvas></div>
+  <div id="status">Press Start, or open the menu to load a photo.</div>
+  <div id="foot">
+    <div class="row" id="actions">
+      <button class="primary" id="btnMatch">Auto-match</button>
+      <button id="btnUndo" disabled>Undo</button>
+      <button id="btnCsv">CSV</button>
+      <button id="btnPng">PNG</button>
+    </div>
+    <div class="row" id="chips" hidden></div>
+  </div>
+</div>
+<video id="video" playsinline muted autoplay></video>
+
+<div id="aim" class="overlay" hidden>
+  <div class="small">Drag a box around the spectrum (the rainbow area), then press Done.</div>
   <canvas id="view" width="640" height="480"></canvas>
-  <video id="video" playsinline muted autoplay></video>
-  <div class="small">Drag on the image to box the spectrum window. The yellow rectangle is what gets measured.</div>
   <div class="row">
-    <label><input type="checkbox" id="chkLock"> lock region</label>
+    <button class="primary" id="btnAimDone">Done</button>
     <label>axis
       <select id="selOrient"><option value="auto">auto</option><option value="vertical">vertical</option><option value="horizontal">horizontal</option></select>
     </label>
@@ -51,54 +79,40 @@ td,th{padding:4px;border-bottom:1px solid var(--line);text-align:left;font-size:
   </div>
 </div>
 
-<div class="panel">
-  <canvas id="plot" style="height:260px"></canvas>
-  <div class="small" id="readout">&nbsp;</div>
-  <div class="row">
-    <label>smooth <input type="range" id="rngSmooth" min="0" max="8" value="2"></label>
-    <label>average <input type="range" id="rngAvg" min="1" max="32" value="4"></label>
-  </div>
-  <div class="row">
-    <label><input type="checkbox" id="chkLin" checked> linearize</label>
-    <label><input type="checkbox" id="chkNorm" checked> normalize</label>
-    <label>channel
-      <select id="selChan"><option value="sum">R+G+B</option><option value="max">max</option><option value="g">green</option></select>
-    </label>
-  </div>
-  <div class="row"><button id="btnDark">Store dark</button><button id="btnDarkClear">Clear dark</button></div>
-</div>
-
-<div class="panel">
-  <b>Calibration</b>
-  <div class="small">Tap a line on the plot, then say which line it is. Two points give a straight line, three or more fit a curve.</div>
-  <div class="row">
-    <label>lamp <select id="selPreset"></select></label>
-    <label>fit
-      <select id="selOrder"><option value="auto">auto</option><option value="1">linear</option><option value="2">quadratic</option><option value="3">cubic</option></select>
-    </label>
-  </div>
-  <div id="pending" class="small">No line selected.</div>
-  <div class="row" id="lineBtns"></div>
-  <div class="row">
-    <input type="number" id="numNm" placeholder="nm" step="0.1" style="width:90px">
-    <button id="btnAddNm">Add</button>
-    <button id="btnCalClear">Clear calibration</button>
-  </div>
-  <table id="calTable"></table>
-  <div class="small" id="calInfo"></div>
-</div>
-
-<div class="panel" id="camCtl" hidden>
-  <b>Camera controls</b>
-  <div id="camSliders" class="row"></div>
-  <div class="small" id="camNote" hidden>This browser gives pages no exposure or focus control. Keep the lines from clipping by lowering the lamp brightness, or take a photo with the camera app (exposure slider) and use “Load photo”.</div>
-</div>
-
-<div class="panel">
-  <div class="row">
-    <button id="btnCsv">Save CSV</button>
-    <button id="btnPng">Save PNG</button>
-    <button id="btnReset">Reset all settings</button>
+<div id="sheet" class="overlay" hidden>
+  <div class="sheetHead"><b>Settings</b><button class="primary" id="btnSheetClose">Close</button></div>
+  <div class="sheetBody">
+    <div class="sec"><h3>Source</h3>
+      <div class="row"><button id="btnLoad">Load photo</button><select id="selCam" hidden></select></div>
+      <input type="file" id="file" accept="image/*" hidden>
+    </div>
+    <div class="sec"><h3>Processing</h3>
+      <div class="row">
+        <label>smooth <input type="range" id="rngSmooth" min="0" max="8" value="2"></label>
+        <label>average <input type="range" id="rngAvg" min="1" max="32" value="4"></label>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="chkLin" checked> linearize</label>
+        <label><input type="checkbox" id="chkNorm" checked> normalize</label>
+        <label>channel <select id="selChan"><option value="sum">R+G+B</option><option value="max">max</option><option value="g">green</option></select></label>
+      </div>
+      <div class="row"><button id="btnDark">Store dark</button><button id="btnDarkClear">Clear dark</button></div>
+    </div>
+    <div class="sec"><h3>Calibration</h3>
+      <div class="row">
+        <label>fit <select id="selOrder"><option value="auto">auto</option><option value="1">linear</option><option value="2">quadratic</option><option value="3">cubic</option></select></label>
+        <label>wavelength <select id="selDir"><option value="auto">auto-detect direction</option><option value="1">grows with pixel</option><option value="-1">falls with pixel</option></select></label>
+      </div>
+      <div class="row"><button id="btnCustom">Custom lines…</button><button id="btnCalClear">Clear calibration</button></div>
+      <table id="calTable"></table>
+      <div class="small" id="calInfo"></div>
+      <div class="small">Manual: tap a peak on the plot, then pick which line it is.</div>
+    </div>
+    <div class="sec" id="camCtl" hidden><h3>Camera controls</h3>
+      <div id="camSliders" class="row"></div>
+      <div class="small" id="camNote" hidden>This browser gives pages no exposure or focus control. Keep lines from clipping by dimming the lamp, or shoot with the camera app and use “Load photo”.</div>
+    </div>
+    <div class="sec"><button id="btnReset">Reset all settings</button></div>
   </div>
 </div>
 
@@ -106,7 +120,7 @@ td,th{padding:4px;border-bottom:1px solid var(--line);text-align:left;font-size:
 (() => {
 'use strict';
 
-// <pure>
+
 function wl2rgb(w){
   let r=0,g=0,b=0;
   if(w>=380&&w<440){r=-(w-440)/60;b=1;}
@@ -187,7 +201,99 @@ function niceStep(range,target){
   const raw=range/target, p=Math.pow(10,Math.floor(Math.log10(raw))), f=raw/p;
   return (f<1.5?1:f<3.5?2:f<7.5?5:10)*p;
 }
-// </pure>
+
+
+// <match>
+function invertMono(g,nm,xmin,xmax){
+  let a=xmin,b=xmax,ga=g(a)-nm,gb=g(b)-nm;
+  if(ga===0)return a; if(gb===0)return b; if(ga*gb>0) return null;
+  for(let k=0;k<50;k++){const m=(a+b)/2,gm=g(m)-nm; if(ga*gm<=0){b=m;gb=gm;}else{a=m;ga=gm;}}
+  return (a+b)/2;
+}
+function slopeRange(g,xmin,xmax){
+  let lo=Infinity,hi=-Infinity,sgn=0; const N=24;
+  for(let k=0;k<N;k++){const x0=xmin+(xmax-xmin)*k/N,x1=xmin+(xmax-xmin)*(k+1)/N,d=(g(x1)-g(x0))/(x1-x0);
+    if(d===0) return null; const s=d>0?1:-1; if(sgn&&s!==sgn) return null; sgn=s; const a=Math.abs(d); if(a<lo)lo=a; if(a>hi)hi=a;}
+  return {ratio:hi/lo,lo:lo,hi:hi,sign:sgn};
+}
+// peaks: [{x,y,fw}] (y 0..1). refs: [{nm,w}] (w = how strong the line normally is, 0..1).
+// opts: dir (+1: nm grows with x, -1: falls, 0: unknown), xmin/xmax (axis extent). Returns {pairs,rms,deg,score,margin} or null.
+function autoMatch(peaks,refs,opts){
+  opts=opts||{};
+  const P=peaks.map((p,i)=>({i:i,x:p.x,y:p.y,fw:Math.max(1,p.fw||3)})).filter(p=>p.y>=0.04);
+  const byY=P.slice().sort((a,b)=>b.y-a.y);
+  const R=refs.slice().sort((a,b)=>a.nm-b.nm).map(r=>({nm:r.nm,w:r.w,strong:r.w>=0.6}));
+  const nStrong=R.filter(r=>r.strong).length;
+  if(P.length<2||nStrong<2) return null;
+  let xmin=Infinity,xmax=-Infinity; for(const p of P){if(p.x<xmin)xmin=p.x;if(p.x>xmax)xmax=p.x;}
+  if(opts.xmin!==undefined){xmin=Math.min(xmin,opts.xmin);xmax=Math.max(xmax,opts.xmax);}
+  const span=Math.max(1,xmax-xmin), lo=opts.lo||330, hi=opts.hi||880, maxRatio=opts.maxRatio||2.6;
+  const intW=opts.intW!==undefined?opts.intW:0.8, minStrong=Math.min(3,nStrong);
+  const seedPeaks=byY.filter(p=>p.y>=0.25).slice(0,10);
+  function greedy(g,tolFn,strongPass,usedP){
+    const out=[],usedR=new Set();
+    for(const p of byY){
+      if(usedP&&usedP.has(p.i)) continue;
+      const pred=g(p.x); let bi=-1,bd=1e9;
+      for(let r=0;r<R.length;r++){ if(R[r].strong!==strongPass||usedR.has(r)) continue; const d=Math.abs(R[r].nm-pred); if(d<bd){bd=d;bi=r;} }
+      if(bi>=0&&bd<=tolFn(p)){usedR.add(bi);out.push({p:p,r:bi});}
+    }
+    return out;
+  }
+  function fitStrong(pairs){
+    for(let deg=(pairs.length>=4?2:1);deg>=1;deg--){
+      const f=polyfit(pairs.map(q=>q.p.x),pairs.map(q=>R[q.r].nm),deg); if(!f) continue;
+      const g=x=>polyval(f,x), sr=slopeRange(g,xmin,xmax); if(!sr||sr.ratio>maxRatio) continue;
+      if(deg===1&&pairs.length>=3){ let ss=0; for(const q of pairs){const e=g(q.p.x)-R[q.r].nm;ss+=e*e;} if(Math.sqrt(ss/pairs.length)>6){ if(pairs.length>=3){ /* try quadratic next */ } } }
+      return {deg:deg,g:g,sr:sr};
+    }
+    return null;
+  }
+  let best=null,second=null; const tol1=opts.tol1||11, allC=[];
+  for(let a=0;a<seedPeaks.length;a++)for(let b=a+1;b<seedPeaks.length;b++){
+    const pa=seedPeaks[a],pb=seedPeaks[b]; if(Math.abs(pa.x-pb.x)<3) continue;
+    for(let ra=0;ra<R.length;ra++){ if(!R[ra].strong) continue;
+      for(let rb=0;rb<R.length;rb++){ if(rb===ra||!R[rb].strong) continue;
+        const slope=(R[rb].nm-R[ra].nm)/(pb.x-pa.x), g0=x=>R[ra].nm+slope*(x-pa.x);
+        if(opts.dir&&Math.sign(slope)!==opts.dir) continue;
+        const v0=g0(xmin),v1=g0(xmax); if(Math.min(v0,v1)<lo-150||Math.max(v0,v1)>hi+150) continue;
+        if(Math.abs(slope)*span>700) continue;
+        let sp=greedy(g0,()=>tol1,true); if(sp.length<2) continue;
+        let fit=null,ok=true;
+        for(let it=0;it<3&&ok;it++){
+          fit=fitStrong(sp); if(!fit){ok=false;break;}
+          const g=fit.g, tolFn=p=>{const dn=Math.abs(g(p.x+p.fw/2)-g(p.x-p.fw/2));return Math.max(3.5,0.6*dn);};
+          const ns=greedy(g,tolFn,true); if(ns.length<2){ok=false;break;} sp=ns;
+        }
+        if(!ok||sp.length<minStrong) continue;
+        fit=fitStrong(sp); if(!fit) continue; const g=fit.g;
+        const usedP=new Set(sp.map(q=>q.p.i));
+        const wp=greedy(g,p=>{const dn=Math.abs(g(p.x+p.fw/2)-g(p.x-p.fw/2));return Math.max(3,0.4*dn);},false,usedP);
+        const pairs=sp.concat(wp);
+        let ss=0; for(const q of pairs){const e=g(q.p.x)-R[q.r].nm; ss+=e*e;} const rms=Math.sqrt(ss/pairs.length);
+        const usedR=new Set(pairs.map(q=>q.r)), usedPP=new Set(pairs.map(q=>q.p.i));
+        let score=0;
+        for(const q of sp) score+=R[q.r].w*(0.5+0.5*q.p.y);
+        for(const q of wp) score+=0.6*R[q.r].w*(0.5+0.5*q.p.y);
+        for(const q of pairs) score-=intW*Math.max(0,q.p.y-R[q.r].w-0.3);
+        for(let r=0;r<R.length;r++){ if(usedR.has(r)||!R[r].strong) continue; const x=invertMono(g,R[r].nm,xmin+0.03*span,xmax-0.03*span); if(x!==null) score-=0.8*R[r].w; }
+        for(const p of P){ if(!usedPP.has(p.i)&&p.y>=0.35) score-=0.2*p.y; }
+        score-=0.06*rms; score-=0.15*Math.max(0,fit.sr.ratio-1.6);
+        const cand={score:score,pairs:pairs.map(q=>({i:q.p.i,x:q.p.x,nm:R[q.r].nm})),rms:rms,deg:fit.deg,nStrong:sp.length};
+        cand.key=sp.map(q=>q.p.i+':'+R[q.r].nm).sort().join();
+        if(opts.debug) allC.push(cand);
+        if(!best||score>best.score){ if(best&&best.key!==cand.key) second=best; best=cand; }
+        else if(cand.key!==best.key&&(!second||score>second.score)) second=cand;
+      }
+    }
+  }
+  if(opts.debug) return allC;
+  if(!best) return null;
+  best.margin=second?best.score-second.score:best.score;
+  return best;
+}
+// </match>
+
 
 const $=id=>document.getElementById(id);
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
@@ -198,52 +304,54 @@ const off=document.createElement('canvas'), octx=off.getContext('2d',{willReadFr
 const snap=document.createElement('canvas'), sctx=snap.getContext('2d');
 
 const PRESETS={
-  'Mercury lamp':[[404.7],[435.8],[491.6],[546.1],[577.0],[579.1],[623.4],[690.7]],
-  'Fluorescent (CFL)':[[435.8],[487.7],[546.5],[611.6]],
-  'Sodium':[[568.8],[589.0],[589.6],[615.4]],
-  'Laser pointers':[[532.0],[650.0]]
+  'Mercury lamp':{auto:[[404.7,.7],[435.8,.9],[491.6,.2],[546.1,1],[578.0,1],[623.4,.25],[690.7,.12]],
+                  manual:[404.7,435.8,491.6,546.1,577.0,579.1,578.0,623.4,690.7]},
+  'Fluorescent (CFL)':{auto:[[404.7,.25],[435.8,.9],[487.7,.6],[546.5,1],[587.6,.3],[611.6,1],[631.1,.3]],
+                  manual:[404.7,435.8,487.7,546.5,587.6,611.6,631.1]},
+  'Sodium':{auto:[[589.3,1],[568.8,.12],[615.4,.08]],manual:[568.8,589.0,589.6,589.3,615.4]},
+  'Lasers 532 + 650':{auto:[[532,1],[650,1]],manual:[532,650]},
+  'Custom':{auto:null,manual:null}
 };
 const LIN=new Float32Array(256), ID=new Float32Array(256);
 for(let i=0;i<256;i++){LIN[i]=Math.pow(i/255,2.2);ID[i]=i/255;}
 
-const KEY='spectro.v1';
+const KEY='spectro.v2';
 const S={
-  src:null,srcW:0,srcH:0,mode:'none', // none | live | still
-  roi:{x:0.35,y:0.4,w:0.3,h:0.25}, lock:false, orient:'auto', flip:false,
-  smooth:2, avg:4, lin:true, norm:true, channel:'sum', preset:'Mercury lamp',
-  cal:{pts:[],order:'auto',axisLen:0,vertical:true},
+  src:null,srcW:0,srcH:0,mode:'none',
+  roi:{x:0.35,y:0.4,w:0.3,h:0.25}, roiSet:false, orient:'auto', flip:false,
+  smooth:2, avg:4, lin:true, norm:true, channel:'sum', preset:'Mercury lamp', custom:[], dirMode:'auto',
+  cal:{pts:[],order:'auto',axisLen:0,vertical:true}, prevCal:null,
   fit:null, fitDeg:0, ema:null, emaKey:'', dark:null, spec:null, satFrac:0,
-  pending:null, stream:null, track:null, plotInfo:null
+  pending:null, stream:null, track:null, plotInfo:null, msg:'', msgUntil:0, baseStatus:'', baseCls:'', aim:false
 };
-
-// ---------- persistence ----------
 function save(){
-  try{localStorage.setItem(KEY,JSON.stringify({roi:S.roi,lock:S.lock,orient:S.orient,flip:S.flip,smooth:S.smooth,avg:S.avg,
-    lin:S.lin,norm:S.norm,channel:S.channel,preset:S.preset,cal:S.cal}));}catch(e){}
+  try{localStorage.setItem(KEY,JSON.stringify({roi:S.roi,roiSet:S.roiSet,orient:S.orient,flip:S.flip,smooth:S.smooth,avg:S.avg,
+    lin:S.lin,norm:S.norm,channel:S.channel,preset:S.preset,custom:S.custom,dirMode:S.dirMode,cal:S.cal}));}catch(e){}
 }
-function load(){
+(function load(){
   try{const j=JSON.parse(localStorage.getItem(KEY)||'null'); if(!j) return;
-    for(const k of ['roi','lock','orient','flip','smooth','avg','lin','norm','channel','preset','cal']) if(j[k]!==undefined) S[k]=j[k];
+    for(const k of ['roi','roiSet','orient','flip','smooth','avg','lin','norm','channel','preset','custom','dirMode','cal']) if(j[k]!==undefined) S[k]=j[k];
   }catch(e){}
-}
-load();
+})();
+if(!PRESETS[S.preset]) S.preset='Mercury lamp';
 
-// ---------- UI init ----------
-function syncUI(){
-  $('chkLock').checked=S.lock; $('selOrient').value=S.orient; $('chkFlip').checked=S.flip;
-  $('rngSmooth').value=S.smooth; $('rngAvg').value=S.avg; $('chkLin').checked=S.lin; $('chkNorm').checked=S.norm;
-  $('selChan').value=S.channel; $('selOrder').value=S.cal.order;
-  view.style.touchAction=S.lock?'auto':'none';
+function flash(t,cls){S.msg=t;S.msgCls=cls||'';S.msgUntil=Date.now()+7000;}
+function refsAuto(){
+  if(S.preset==='Custom') return S.custom.map(nm=>({nm:nm,w:1}));
+  return PRESETS[S.preset].auto.map(a=>({nm:a[0],w:a[1]}));
 }
+function refsManual(){return S.preset==='Custom'?S.custom.slice():PRESETS[S.preset].manual.slice();}
+
+// ---------- UI wiring ----------
 const selPreset=$('selPreset');
 for(const k of Object.keys(PRESETS)){const o=document.createElement('option');o.value=k;o.textContent=k;selPreset.appendChild(o);}
-if(!PRESETS[S.preset]) S.preset='Mercury lamp';
-selPreset.value=S.preset;
+function syncUI(){
+  selPreset.value=S.preset; $('selOrient').value=S.orient; $('chkFlip').checked=S.flip;
+  $('rngSmooth').value=S.smooth; $('rngAvg').value=S.avg; $('chkLin').checked=S.lin; $('chkNorm').checked=S.norm;
+  $('selChan').value=S.channel; $('selOrder').value=S.cal.order; $('selDir').value=S.dirMode;
+}
 syncUI();
-if(!window.isSecureContext) $('secure').hidden=false;
-
 function bind(id,ev,fn){$(id).addEventListener(ev,fn);}
-bind('chkLock','change',e=>{S.lock=e.target.checked;view.style.touchAction=S.lock?'auto':'none';save();});
 bind('selOrient','change',e=>{S.orient=e.target.value;S.ema=null;save();});
 bind('chkFlip','change',e=>{S.flip=e.target.checked;save();});
 bind('rngSmooth','input',e=>{S.smooth=+e.target.value;save();});
@@ -251,27 +359,42 @@ bind('rngAvg','input',e=>{S.avg=+e.target.value;save();});
 bind('chkLin','change',e=>{S.lin=e.target.checked;S.ema=null;save();});
 bind('chkNorm','change',e=>{S.norm=e.target.checked;save();});
 bind('selChan','change',e=>{S.channel=e.target.value;S.ema=null;save();});
-bind('selPreset','change',e=>{S.preset=e.target.value;buildLineButtons();save();});
 bind('selOrder','change',e=>{S.cal.order=e.target.value;calFit();renderCal();save();});
-bind('btnDark','click',()=>{if(S.ema){S.dark={key:S.emaKey,vals:Float64Array.from(S.ema)};}});
-bind('btnDarkClear','click',()=>{S.dark=null;});
+bind('selDir','change',e=>{S.dirMode=e.target.value;save();});
+bind('selPreset','change',e=>{
+  S.preset=e.target.value;
+  if(S.preset==='Custom') askCustom();
+  S.pending=null; showChips(); save();
+});
+bind('btnDark','click',()=>{if(S.ema){S.dark={key:S.emaKey,vals:Float64Array.from(S.ema)};flash('Dark frame stored.');}});
+bind('btnDarkClear','click',()=>{S.dark=null;flash('Dark frame cleared.');});
 bind('btnReset','click',()=>{try{localStorage.removeItem(KEY);}catch(e){} location.reload();});
+bind('btnMore','click',()=>{$('sheet').hidden=false;});
+bind('btnSheetClose','click',()=>{$('sheet').hidden=true;});
+bind('btnRegion','click',openAim);
+bind('btnAimDone','click',closeAim);
+bind('btnCustom','click',()=>{S.preset='Custom';syncUI();askCustom();save();});
+function askCustom(){
+  const t=window.prompt('Line wavelengths in nm, comma separated',S.custom.join(', '));
+  if(t===null) return;
+  S.custom=t.split(/[ ,;]+/).map(parseFloat).filter(v=>v>200&&v<1100).sort((a,b)=>a-b); save();
+}
+function openAim(){if(!S.src){flash('Start the camera or load a photo first.','warn');return;}S.aim=true;$('aim').hidden=false;}
+function closeAim(){S.aim=false;$('aim').hidden=true;save();}
 
 // ---------- camera ----------
 async function startCamera(deviceId){
-  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){setStatus('This browser has no camera API (needs HTTPS).','bad');return;}
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){flash('No camera API: the page must be served over HTTPS.','bad');return;}
   stopStream();
   const base={width:{ideal:3840},height:{ideal:2160}};
-  const video_c=deviceId?Object.assign({deviceId:{exact:deviceId}},base):Object.assign({facingMode:{ideal:'environment'}},base);
-  try{
-    S.stream=await navigator.mediaDevices.getUserMedia({audio:false,video:video_c});
-  }catch(e){setStatus('Camera error: '+(e.name||e)+'. Check the permission for this site.','bad');return;}
+  const vc=deviceId?Object.assign({deviceId:{exact:deviceId}},base):Object.assign({facingMode:{ideal:'environment'}},base);
+  try{S.stream=await navigator.mediaDevices.getUserMedia({audio:false,video:vc});}
+  catch(e){flash('Camera error: '+(e.name||e)+'. Check this site’s camera permission.','bad');return;}
   S.track=S.stream.getVideoTracks()[0];
   video.srcObject=S.stream; video.setAttribute('playsinline',''); video.muted=true;
   try{await video.play();}catch(e){}
   S.mode='live'; S.src=video; S.ema=null;
-  $('btnFreeze').disabled=false; $('btnFreeze').textContent='Freeze';
-  $('btnStart').textContent='Restart camera';
+  $('btnFreeze').disabled=false; $('btnFreeze').textContent='Freeze'; $('btnStart').textContent='Restart';
   try{
     const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
     const sel=$('selCam'); sel.innerHTML='';
@@ -280,6 +403,7 @@ async function startCamera(deviceId){
     sel.hidden=devs.length<2;
   }catch(e){}
   buildCamControls();
+  if(!S.roiSet) openAim();
 }
 function stopStream(){if(S.stream){S.stream.getTracks().forEach(t=>t.stop());S.stream=null;S.track=null;}}
 bind('btnStart','click',()=>startCamera());
@@ -287,7 +411,7 @@ bind('selCam','change',e=>startCamera(e.target.value));
 bind('btnFreeze','click',()=>{
   if(S.mode==='live'){
     snap.width=video.videoWidth; snap.height=video.videoHeight; sctx.drawImage(video,0,0);
-    S.src=snap; S.srcW=snap.width; S.srcH=snap.height; S.mode='still'; $('btnFreeze').textContent='Resume live';
+    S.src=snap;S.srcW=snap.width;S.srcH=snap.height;S.mode='still';$('btnFreeze').textContent='Live';
   }else if(S.stream){S.mode='live';S.src=video;$('btnFreeze').textContent='Freeze';}
   S.ema=null;
 });
@@ -300,15 +424,14 @@ bind('file','change',e=>{
     if(w*h>maxPx){const s=Math.sqrt(maxPx/(w*h));w=Math.floor(w*s);h=Math.floor(h*s);}
     snap.width=w;snap.height=h;sctx.drawImage(img,0,0,w,h);URL.revokeObjectURL(url);
     S.src=snap;S.srcW=w;S.srcH=h;S.mode='still';S.ema=null;
-    $('btnFreeze').disabled=!S.stream; $('btnFreeze').textContent='Resume live';
+    $('btnFreeze').disabled=!S.stream; $('btnFreeze').textContent='Live';
+    $('sheet').hidden=true; if(!S.roiSet) openAim();
   };
-  img.onerror=()=>setStatus('Could not read that image.','bad');
+  img.onerror=()=>flash('Could not read that image.','bad');
   img.src=url; e.target.value='';
 });
-
 function buildCamControls(){
-  const box=$('camSliders'); box.innerHTML='';
-  $('camCtl').hidden=false;
+  const box=$('camSliders'); box.innerHTML=''; $('camCtl').hidden=false;
   const track=S.track; let any=false;
   if(track&&track.getCapabilities){
     const caps=track.getCapabilities(), cur=track.getSettings();
@@ -316,8 +439,7 @@ function buildCamControls(){
       ['iso','ISO',{exposureMode:'manual'}],['focusDistance','focus distance',{focusMode:'manual'}],
       ['colorTemperature','white balance K',{whiteBalanceMode:'manual'}]];
     for(const d of defs){
-      const key=d[0],c=caps[key]; if(!c||c.min===undefined||c.max===undefined) continue;
-      any=true;
+      const key=d[0],c=caps[key]; if(!c||c.min===undefined||c.max===undefined) continue; any=true;
       const wrap=document.createElement('label'); wrap.appendChild(document.createTextNode(d[1]+' '));
       const r=document.createElement('input'); r.type='range'; r.min=c.min; r.max=c.max; r.step=c.step||((c.max-c.min)/100);
       r.value=(cur[key]!==undefined?cur[key]:c.min);
@@ -328,11 +450,16 @@ function buildCamControls(){
   $('camNote').hidden=any;
 }
 
-// ---------- region selection ----------
+// ---------- region selection (full-screen aim view) ----------
 let drag=null;
-function vpos(e){const r=view.getBoundingClientRect();return{x:clamp((e.clientX-r.left)/r.width,0,1),y:clamp((e.clientY-r.top)/r.height,0,1)};}
-function setRoi(x0,y0,x1,y1){S.roi={x:Math.min(x0,x1),y:Math.min(y0,y1),w:Math.abs(x1-x0),h:Math.abs(y1-y0)};S.ema=null;}
-view.addEventListener('pointerdown',e=>{if(S.lock||!S.src)return;view.setPointerCapture(e.pointerId);const p=vpos(e);drag={x:p.x,y:p.y};setRoi(p.x,p.y,p.x,p.y);});
+function vpos(e){
+  const r=view.getBoundingClientRect(), a=view.width/view.height;
+  let dw=r.width, dh=r.width/a; if(dh>r.height){dh=r.height;dw=r.height*a;}
+  const ox=r.left+(r.width-dw)/2, oy=r.top+(r.height-dh)/2;
+  return{x:clamp((e.clientX-ox)/dw,0,1),y:clamp((e.clientY-oy)/dh,0,1)};
+}
+function setRoi(x0,y0,x1,y1){S.roi={x:Math.min(x0,x1),y:Math.min(y0,y1),w:Math.abs(x1-x0),h:Math.abs(y1-y0)};S.ema=null;S.roiSet=true;}
+view.addEventListener('pointerdown',e=>{if(!S.src)return;view.setPointerCapture(e.pointerId);const p=vpos(e);drag={x:p.x,y:p.y};setRoi(p.x,p.y,p.x,p.y);});
 view.addEventListener('pointermove',e=>{if(!drag)return;const p=vpos(e);setRoi(drag.x,drag.y,p.x,p.y);});
 view.addEventListener('pointerup',()=>{if(drag){drag=null;save();}});
 
@@ -348,24 +475,25 @@ function compute(){
   const d=octx.getImageData(0,0,rw,rh).data;
   const vertical=S.orient==='vertical'||(S.orient==='auto'&&rh>=rw);
   const n=vertical?rh:rw, m=vertical?rw:rh, start=vertical?ry:rx;
-  const acc=new Float64Array(n); let sat=0; const lut=S.lin?LIN:ID, ch=S.channel;
+  const acc=new Float64Array(n), aR=new Float64Array(n), aB=new Float64Array(n), aS=new Float64Array(n);
+  let sat=0; const lut=S.lin?LIN:ID, ch=S.channel;
   for(let y=0;y<rh;y++){
     for(let x=0;x<rw;x++){
-      const i=(y*rw+x)*4, r=d[i],g=d[i+1],b=d[i+2];
+      const i=(y*rw+x)*4, r=d[i],g=d[i+1],b=d[i+2], k=vertical?y:x;
       if(r>=250||g>=250||b>=250) sat++;
       let v; if(ch==='sum') v=lut[r]+lut[g]+lut[b]; else if(ch==='max') v=lut[Math.max(r,g,b)]; else v=lut[g];
-      acc[vertical?y:x]+=v;
+      acc[k]+=v; aR[k]+=r; aB[k]+=b; aS[k]+=r+g+b;
     }
   }
-  for(let i=0;i<n;i++) acc[i]/=m;
+  for(let i=0;i<n;i++){acc[i]/=m;aR[i]/=m;aB[i]/=m;aS[i]/=(3*m);}
   S.satFrac=sat/(rw*rh);
   const key=[n,start,vertical,sw,sh,ch,S.lin].join();
   const a=1/Math.max(1,S.avg);
   if(!S.ema||S.emaKey!==key||S.ema.length!==n){S.ema=Float64Array.from(acc);S.emaKey=key;}
   else for(let i=0;i<n;i++) S.ema[i]+=a*(acc[i]-S.ema[i]);
   const dk=(S.dark&&S.dark.key===key)?S.dark.vals:null;
-  const xs=new Float64Array(n), raw=new Float64Array(n);
-  for(let i=0;i<n;i++){const j=S.flip?n-1-i:i; xs[i]=start+j+0.5; raw[i]=S.ema[j]-(dk?dk[j]:0);}
+  const xs=new Float64Array(n), raw=new Float64Array(n), cr=new Float64Array(n), cb=new Float64Array(n), br=new Float64Array(n);
+  for(let i=0;i<n;i++){const j=S.flip?n-1-i:i; xs[i]=start+j+0.5; raw[i]=S.ema[j]-(dk?dk[j]:0); cr[i]=aR[j]; cb[i]=aB[j]; br[i]=aS[j];}
   const ys=smoothArr(raw,S.smooth);
   let mx=-Infinity,mn=Infinity; for(let i=0;i<n;i++){if(ys[i]>mx)mx=ys[i];if(ys[i]<mn)mn=ys[i];}
   if(S.norm&&mx>0){for(let i=0;i<n;i++)ys[i]/=mx; mn/=mx; mx=1;}
@@ -374,7 +502,7 @@ function compute(){
     const i0=clamp(Math.floor(p.pos),0,n-2), fr=p.pos-i0;
     p.xabs=xs[i0]+fr*(xs[i0+1]-xs[i0]);
   }
-  S.spec={xs:xs,ys:ys,n:n,vertical:vertical,start:start,ymax:mx,ymin:mn,peaks:peaks,axisLen:vertical?sh:sw,rw:rw,rh:rh};
+  S.spec={raw:raw,xs:xs,ys:ys,n:n,vertical:vertical,start:start,ymax:mx,ymin:mn,peaks:peaks,axisLen:vertical?sh:sw,rw:rw,rh:rh,cr:cr,cb:cb,br:br,flip:S.flip};
 }
 
 // ---------- calibration ----------
@@ -384,32 +512,52 @@ function nmAt(xabs){return S.fit?polyval(S.fit,xabs*axisScale()):null;}
 function calOk(){return !!(S.fit&&S.spec&&S.cal.vertical===S.spec.vertical);}
 function calFit(){
   const p=S.cal.pts; S.fit=null;S.fitDeg=0; if(p.length<2) return;
-  let deg=S.cal.order==='auto'?(p.length>=3?2:1):+S.cal.order;
+  let deg=S.cal.order==='auto'?(p.length>=4?2:p.length>=3?2:1):+S.cal.order;
   deg=Math.min(deg,p.length-1,3);
   S.fit=polyfit(p.map(q=>q.x),p.map(q=>q.nm),deg); S.fitDeg=deg;
 }
-function updatePending(){
-  const el=$('pending');
-  if(!S.pending){el.textContent='No line selected. Tap a line on the plot.';return;}
-  let t='Selected position '+S.pending.xabs.toFixed(1)+' px';
-  if(calOk()) t+=' (currently reads '+nmAt(S.pending.xabs).toFixed(1)+' nm)';
-  el.textContent=t+'. Which line is it?';
+function dirCue(sp){
+  const n=sp.n; let bmin=Infinity; for(let i=0;i<n;i++) if(sp.br[i]<bmin) bmin=sp.br[i];
+  let sw=0,sx=0,sy=0; for(let i=0;i<n;i++){const w=sp.br[i]-bmin; sw+=w; sx+=w*sp.xs[i]; sy+=w*(sp.cr[i]-sp.cb[i]);}
+  if(!(sw>0)) return 0;
+  const mx=sx/sw,my=sy/sw; let cxy=0,cxx=0,cyy=0;
+  for(let i=0;i<n;i++){const w=sp.br[i]-bmin,dx=sp.xs[i]-mx,dy=(sp.cr[i]-sp.cb[i])-my; cxy+=w*dx*dy;cxx+=w*dx*dx;cyy+=w*dy*dy;}
+  const c=cxy/Math.sqrt(cxx*cyy+1e-12);
+  return Math.abs(c)<0.25?0:(c>0?1:-1);
 }
-function buildLineButtons(){
-  const box=$('lineBtns'); box.innerHTML='';
-  for(const l of PRESETS[S.preset]){
-    const b=document.createElement('button'); b.textContent=l[0]+' nm'; b.addEventListener('click',()=>addPoint(l[0])); box.appendChild(b);
+function doMatch(){
+  const sp=S.spec; if(!sp){flash('Nothing to match yet.','warn');return;}
+  if(S.preset==='Custom'&&S.custom.length<2){askCustom();}
+  const refs=refsAuto(); if(refs.length<2){flash('This lamp needs at least two lines to calibrate.','warn');return;}
+  if(!sp.peaks.length){flash('No peaks found: adjust the region or exposure.','warn');return;}
+  const dir=S.dirMode==='auto'?dirCue(sp):+S.dirMode;
+  const xmin=Math.min(sp.xs[0],sp.xs[sp.n-1]), xmax=Math.max(sp.xs[0],sp.xs[sp.n-1]);
+  let res=null;
+  for(const k of [0,1,2]){                       // the right amount of smoothing depends on how far apart the lines are
+    const y=smoothArr(sp.raw,k); let mx=0; for(let i=0;i<y.length;i++) if(y[i]>mx) mx=y[i];
+    if(!(mx>0)) continue;
+    const yn=y.map(v=>v/mx);
+    const pk=findPeaks(yn).map(p=>{const i0=clamp(Math.floor(p.pos),0,sp.n-2);return{x:sp.xs[i0]+(p.pos-i0)*(sp.xs[i0+1]-sp.xs[i0]),y:p.y,fw:p.fwhm};});
+    const r=autoMatch(pk,refs,{dir:dir,xmin:xmin,xmax:xmax});
+    if(r&&(!res||r.score>res.score)) res=r;
   }
+  if(!res||res.pairs.length<2){flash('No consistent match. Try the Region, the lamp type, or less exposure.','bad');return;}
+  S.prevCal=JSON.parse(JSON.stringify(S.cal)); $('btnUndo').disabled=false;
+  S.cal={pts:res.pairs.map(p=>({x:p.x,nm:p.nm})).sort((a,b)=>a.x-b.x),order:'auto',axisLen:sp.axisLen,vertical:sp.vertical};
+  $('selOrder').value='auto'; calFit(); renderCal(); S.pending=null; showChips(); save();
+  const conf=res.margin>=0.5?'high':res.margin>=0.15?'medium':'low';
+  flash(res.pairs.length+' lines matched, rms '+res.rms.toFixed(1)+' nm, '+conf+' confidence'+(conf==='low'?': check labels':''),conf==='low'?'warn':'ok');
 }
+bind('btnMatch','click',doMatch);
+bind('btnUndo','click',()=>{if(!S.prevCal)return;S.cal=S.prevCal;S.prevCal=null;$('btnUndo').disabled=true;$('selOrder').value=S.cal.order;calFit();renderCal();save();flash('Calibration restored.');});
 function addPoint(nm){
-  if(!S.pending||!(nm>0)) {$('pending').textContent='Tap a line on the plot first.';return;}
+  if(!S.pending||!(nm>0)||!S.spec) return;
   if(!S.cal.pts.length||S.cal.vertical!==S.spec.vertical||!S.cal.axisLen){S.cal.pts=[];S.cal.axisLen=S.spec.axisLen;S.cal.vertical=S.spec.vertical;}
   const x=toCal(S.pending.xabs);
   S.cal.pts=S.cal.pts.filter(p=>p.nm!==nm).concat([{x:x,nm:nm}]).sort((a,b)=>a.x-b.x);
-  S.pending=null; calFit(); renderCal(); updatePending(); save();
+  S.pending=null; calFit(); renderCal(); showChips(); save();
 }
-bind('btnAddNm','click',()=>{const v=parseFloat($('numNm').value);addPoint(v);});
-bind('btnCalClear','click',()=>{S.cal.pts=[];S.cal.axisLen=0;S.fit=null;renderCal();updatePending();save();});
+bind('btnCalClear','click',()=>{S.prevCal=JSON.parse(JSON.stringify(S.cal));$('btnUndo').disabled=false;S.cal.pts=[];S.cal.axisLen=0;S.fit=null;renderCal();save();});
 function renderCal(){
   const t=$('calTable'); t.innerHTML='';
   if(!S.cal.pts.length){$('calInfo').textContent='Not calibrated: the plot shows pixels.';return;}
@@ -423,95 +571,106 @@ function renderCal(){
     tr.lastChild.appendChild(b); t.appendChild(tr);
   });
   const n=S.cal.pts.length;
-  $('calInfo').textContent=S.fit?('fit: order '+S.fitDeg+', rms error '+Math.sqrt(ss/n).toFixed(2)+' nm'+(n<3?' (add a third point for a curved fit)':'')):'Add at least two points.';
+  $('calInfo').textContent=S.fit?('fit order '+S.fitDeg+', rms error '+Math.sqrt(ss/n).toFixed(2)+' nm'):'Add at least two points.';
 }
-calFit(); renderCal(); buildLineButtons(); updatePending();
+function showChips(){
+  const box=$('chips'); box.innerHTML='';
+  if(!S.pending){box.hidden=true;$('actions').hidden=false;return;}
+  $('actions').hidden=true; box.hidden=false;
+  const mk=(txt,fn,cls)=>{const b=document.createElement('button');b.textContent=txt;if(cls)b.className=cls;b.addEventListener('click',fn);box.appendChild(b);};
+  mk('Cancel',()=>{S.pending=null;showChips();});
+  for(const nm of refsManual()) mk(String(nm),()=>addPoint(nm),'primary');
+  mk('other…',()=>{const v=parseFloat(window.prompt('Wavelength in nm'));if(v>0)addPoint(v);});
+}
+calFit(); renderCal(); showChips();
 
 // ---------- drawing ----------
-function setStatus(t,cls){const el=$('status');el.textContent=t;el.className='small '+(cls||'');}
-
 function drawView(){
   const w=S.srcW,h=S.srcH; if(!w||!h) return;
-  const cw=Math.min(w,900), chh=Math.round(cw*h/w);
+  const cw=Math.min(w,1000), chh=Math.round(cw*h/w);
   if(view.width!==cw||view.height!==chh){view.width=cw;view.height=chh;}
   vctx.drawImage(S.src,0,0,cw,chh);
-  const r=S.roi; vctx.lineWidth=2; vctx.strokeStyle='#ffd54a';
+  const r=S.roi; vctx.lineWidth=Math.max(2,cw/300); vctx.strokeStyle='#ffd54a';
   vctx.strokeRect(r.x*cw,r.y*chh,r.w*cw,r.h*chh);
 }
-
+function nearestRef(nm,tol){
+  let best=null,bd=1e9; for(const r of refsManual()){const d=Math.abs(r-nm); if(d<bd){bd=d;best=r;}}
+  return bd<=tol?best:null;
+}
 function drawPlot(){
   const dpr=window.devicePixelRatio||1, W=plot.clientWidth, H=plot.clientHeight;
+  if(!W||!H) return;
   const cw=Math.round(W*dpr), chh=Math.round(H*dpr);
   if(plot.width!==cw||plot.height!==chh){plot.width=cw;plot.height=chh;}
   const c=pctx; c.setTransform(dpr,0,0,dpr,0,0);
   c.fillStyle='#0b0d11'; c.fillRect(0,0,W,H);
   const sp=S.spec;
-  if(!sp){c.fillStyle='#9aa4b2';c.font='13px system-ui';c.fillText('No spectrum yet: start the camera and box the rainbow.',12,24);S.plotInfo=null;return;}
-  const L=44,R=10,T=12,B=26, pw=W-L-R, ph=H-T-B, n=sp.n;
+  if(!sp){c.fillStyle='#9aa4b2';c.font='13px system-ui';c.fillText('Press Start, then Region to box the rainbow.',10,22);S.plotInfo=null;return;}
+  const L=34,R=6,T=5,B=18, bandH=(H>230?36:0), gT=T+bandH+(bandH?4:0);
+  const pw=W-L-R, ph=H-gT-B, n=sp.n;
   const cal=calOk();
   const dx=new Float64Array(n); for(let i=0;i<n;i++) dx[i]=cal?nmAt(sp.xs[i]):sp.xs[i];
   const xmin=Math.min(dx[0],dx[n-1]), xmax=Math.max(dx[0],dx[n-1]);
-  if(!(xmax>xmin)){return;}
+  if(!(xmax>xmin)) return;
   const X=v=>L+(v-xmin)/(xmax-xmin)*pw;
-  const ymax=(S.norm?1:Math.max(sp.ymax,1e-6))*1.06, ymin=Math.min(0,sp.ymin*1.05);
-  const Y=v=>T+ph-(v-ymin)/(ymax-ymin)*ph;
-  c.font='11px system-ui'; c.textBaseline='alphabetic';
-  // grid
-  const xs=niceStep(xmax-xmin,7); c.strokeStyle='#1f2630'; c.fillStyle='#9aa4b2'; c.lineWidth=1;
-  for(let v=Math.ceil(xmin/xs)*xs; v<=xmax; v+=xs){const x=Math.round(X(v))+0.5;c.beginPath();c.moveTo(x,T);c.lineTo(x,T+ph);c.stroke();c.fillText(String(Math.round(v*100)/100),x-10,H-8);}
-  const ys_=niceStep(ymax-ymin,4);
-  for(let v=Math.ceil(ymin/ys_)*ys_; v<=ymax; v+=ys_){const y=Math.round(Y(v))+0.5;c.beginPath();c.moveTo(L,y);c.lineTo(L+pw,y);c.stroke();c.fillText(S.norm?v.toFixed(1):v.toFixed(2),4,y+4);}
-  c.fillText(cal?'wavelength, nm':'pixel along the spectrum',L+pw-110,H-8);
+  // cropped picture of the region, lined up with the plot's x axis
+  if(bandH){
+    c.fillStyle='#000'; c.fillRect(L,T,pw,bandH);
+    c.imageSmoothingEnabled=true;
+    for(let i=0;i<n;i++){
+      const j=sp.flip?n-1-i:i, x0=X(dx[i]), x1=X(dx[i<n-1?i+1:i-1]);
+      const wd=Math.abs(x1-x0)+0.7, xl=Math.min(x0,x1);
+      if(sp.vertical) c.drawImage(off,0,j,sp.rw,1,xl,T,wd,bandH); else c.drawImage(off,j,0,1,sp.rh,xl,T,wd,bandH);
+    }
+    c.strokeStyle='#2a313c'; c.lineWidth=1; c.strokeRect(L+0.5,T+0.5,pw-1,bandH-1);
+  }
+  const ymax=(S.norm?1:Math.max(sp.ymax,1e-6))*1.08, ymin=Math.min(0,sp.ymin*1.05);
+  const Y=v=>gT+ph-(v-ymin)/(ymax-ymin)*ph;
+  c.font='10.5px system-ui'; c.textBaseline='alphabetic';
+  const xs_=niceStep(xmax-xmin,6); c.strokeStyle='#1c232d'; c.fillStyle='#9aa4b2'; c.lineWidth=1;
+  for(let v=Math.ceil(xmin/xs_)*xs_; v<=xmax; v+=xs_){const x=Math.round(X(v))+0.5;c.beginPath();c.moveTo(x,gT);c.lineTo(x,gT+ph);c.stroke();c.fillText(String(Math.round(v*100)/100),x-9,H-5);}
+  const ys_=niceStep(ymax-ymin,3);
+  for(let v=Math.ceil(ymin/ys_)*ys_; v<=ymax; v+=ys_){const y=Math.round(Y(v))+0.5;c.beginPath();c.moveTo(L,y);c.lineTo(L+pw,y);c.stroke();c.fillText(S.norm?v.toFixed(1):v.toFixed(2),2,y+3);}
   // reference lines of the chosen lamp
   if(cal){
-    c.setLineDash([3,4]);c.strokeStyle='#5b6675';
-    for(const l of PRESETS[S.preset]){const v=l[0]; if(v<xmin||v>xmax) continue; const x=X(v);c.beginPath();c.moveTo(x,T+14);c.lineTo(x,T+ph);c.stroke();c.fillStyle='#7d8897';c.fillText(String(Math.round(v)),x+2,T+10);}
+    c.setLineDash([3,4]);c.strokeStyle='#4b5563';
+    for(const v of refsManual()){ if(v<xmin||v>xmax) continue; const x=X(v);c.beginPath();c.moveTo(x,gT);c.lineTo(x,gT+ph);c.stroke();}
     c.setLineDash([]);
   }
-  // spectrum fill + line
   for(let i=0;i<n-1;i++){
-    const y0=Y(Math.max(0,sp.ys[i])), base=Y(0);
-    const x0=X(dx[i]), x1=X(dx[i+1]); const wdt=Math.abs(x1-x0)+0.8;
+    const y0=Y(Math.max(0,sp.ys[i])), base=Y(0), x0=X(dx[i]), x1=X(dx[i+1]), wd=Math.abs(x1-x0)+0.8;
     if(cal){const rgb=wl2rgb(dx[i]);c.fillStyle='rgba('+rgb[0]+','+rgb[1]+','+rgb[2]+',0.55)';}else c.fillStyle='rgba(150,170,200,0.35)';
-    c.fillRect(Math.min(x0,x1),y0,wdt,base-y0);
+    c.fillRect(Math.min(x0,x1),y0,wd,base-y0);
   }
-  c.strokeStyle='#ffffff'; c.lineWidth=1.4; c.beginPath();
+  c.strokeStyle='#fff'; c.lineWidth=1.3; c.beginPath();
   for(let i=0;i<n;i++){const x=X(dx[i]),y=Y(sp.ys[i]); if(i)c.lineTo(x,y); else c.moveTo(x,y);} c.stroke();
-  // peaks
+  // peaks and labels
   const placed=[]; const order=sp.peaks.slice().sort((a,b)=>b.y-a.y).slice(0,16);
-  c.fillStyle='#ffd54a'; c.strokeStyle='#ffd54a';
+  for(const p of sp.peaks) p.xv=cal?nmAt(p.xabs):p.xabs;
   for(const p of order){
-    p.xv=cal?nmAt(p.xabs):p.xabs;
-    const x=X(p.xv), y=Y(p.y);
-    c.beginPath();c.arc(x,y,2.5,0,6.283);c.fill();
-    if(placed.every(q=>Math.abs(q-x)>30)){placed.push(x);c.fillText(cal?p.xv.toFixed(1):p.xabs.toFixed(0),x-12,Math.max(T+22,y-8));}
+    const x=X(p.xv), y=Y(p.y); let label,col='#ffd54a';
+    if(cal){const dn=Math.abs(nmAt(p.xabs+p.fwhm/2)-nmAt(p.xabs-p.fwhm/2)); const ref=nearestRef(p.xv,Math.max(4,0.5*dn)); if(ref!==null){label=String(ref);col='#5be39a';} else label=p.xv.toFixed(0);}
+    else label=p.xabs.toFixed(0);
+    c.fillStyle=col; c.beginPath();c.arc(x,y,2.4,0,6.283);c.fill();
+    if(placed.every(q=>Math.abs(q-x)>26)){placed.push(x);c.font='10.5px system-ui';c.fillText(label,clamp(x-11,L,W-30),Math.max(gT+10,y-7));}
   }
-  for(const p of sp.peaks) if(p.xv===undefined) p.xv=cal?nmAt(p.xabs):p.xabs;
-  // pending marker
   if(S.pending){
     const v=cal?nmAt(S.pending.xabs):S.pending.xabs;
-    if(v>=xmin&&v<=xmax){c.strokeStyle='#4cc2ff';c.lineWidth=1.5;const x=X(v);c.beginPath();c.moveTo(x,T);c.lineTo(x,T+ph);c.stroke();}
+    if(v>=xmin&&v<=xmax){c.strokeStyle='#4cc2ff';c.lineWidth=1.5;const x=X(v);c.beginPath();c.moveTo(x,gT);c.lineTo(x,gT+ph);c.stroke();}
   }
-  S.plotInfo={L:L,pw:pw,xmin:xmin,xmax:xmax,X:X,dx:dx,cal:cal};
+  S.plotInfo={L:L,pw:pw,gT:gT,ph:ph,xmin:xmin,xmax:xmax,X:X,dx:dx,cal:cal};
 }
-
 plot.addEventListener('pointerdown',e=>{
   const sp=S.spec,info=S.plotInfo; if(!sp||!info) return;
-  const r=plot.getBoundingClientRect(), px=e.clientX-r.left;
+  const r=plot.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
+  if(py<info.gT-2) return;
   const xv=info.xmin+(px-info.L)/info.pw*(info.xmax-info.xmin);
   let best=null,bd=1e9;
   for(const p of sp.peaks){if(p.xv===undefined)continue;const dd=Math.abs(info.X(p.xv)-px);if(dd<bd){bd=dd;best=p;}}
   let xabs;
   if(best&&bd<16) xabs=best.xabs;
   else{let bi=0,bv=1e18;for(let i=0;i<sp.n;i++){const dv=Math.abs(info.dx[i]-xv);if(dv<bv){bv=dv;bi=i;}} xabs=sp.xs[bi];}
-  S.pending={xabs:xabs}; updatePending();
-});
-plot.addEventListener('pointermove',e=>{
-  const sp=S.spec,info=S.plotInfo; if(!sp||!info) return;
-  const r=plot.getBoundingClientRect(), px=e.clientX-r.left;
-  const xv=info.xmin+(px-info.L)/info.pw*(info.xmax-info.xmin);
-  let bi=0,bv=1e18;for(let i=0;i<sp.n;i++){const dv=Math.abs(info.dx[i]-xv);if(dv<bv){bv=dv;bi=i;}}
-  $('readout').textContent=(info.cal?xv.toFixed(1)+' nm':'pixel '+sp.xs[bi].toFixed(0))+'   intensity '+sp.ys[bi].toFixed(3);
+  S.pending={xabs:xabs}; showChips(); S.needDraw=true;
 });
 
 // ---------- export ----------
@@ -523,7 +682,19 @@ bind('btnCsv','click',()=>{
 });
 bind('btnPng','click',()=>{plot.toBlob(b=>{if(b)download('spectrum.png',b);});});
 
-// ---------- main loop ----------
+// ---------- status + main loop ----------
+function statusText(){
+  const sp=S.spec;
+  if(Date.now()<S.msgUntil){return {t:S.msg,c:S.msgCls||''};}
+  if(S.pending){return {t:'Selected '+S.pending.xabs.toFixed(0)+' px'+(calOk()?' (reads '+nmAt(S.pending.xabs).toFixed(1)+' nm)':'')+': which line is it?',c:''};}
+  if(!sp) return {t:'Press Start, or open the menu to load a photo.',c:''};
+  let t=S.srcW+'×'+S.srcH+(S.mode==='live'?' live':' still')+' · clip '+(S.satFrac*100).toFixed(1)+'%';
+  let c='';
+  if(S.satFrac>0.02){t+=' (too bright)';c='warn';}
+  if(S.cal.pts.length&&S.cal.vertical!==sp.vertical){t+=' · calibration is for the other axis';c='warn';}
+  else if(S.fit) t+=' · '+S.cal.pts.length+' pts, order '+S.fitDeg;
+  return {t:t,c:c};
+}
 let last=0;
 function loop(t){
   requestAnimationFrame(loop);
@@ -532,23 +703,16 @@ function loop(t){
     if(video.readyState<2||!video.videoWidth) return;
     S.srcW=video.videoWidth; S.srcH=video.videoHeight;
   }
-  drawView();
-  if(t-last>60){
-    last=t; compute();
-    const sp=S.spec;
-    if(sp){
-      const satPct=(S.satFrac*100).toFixed(1);
-      let txt=S.srcW+'×'+S.srcH+(S.mode==='live'?' live':' still')+' | region '+sp.rw+'×'+sp.rh+' px, axis '+(sp.vertical?'vertical':'horizontal')+' | clipped '+satPct+'%';
-      let cls='';
-      if(S.satFrac>0.02){txt+=' (too bright: lower the exposure or lamp)';cls='warn';}
-      if(S.cal.pts.length&&S.spec&&S.cal.vertical!==sp.vertical){txt+=' | calibration is for the other axis';cls='warn';}
-      setStatus(txt,cls);
-    }
+  if(S.aim) drawView();
+  if(t-last>(S.mode==='live'?66:120)||S.needDraw){
+    last=t; S.needDraw=false; compute(); drawPlot();
+    const st=statusText(), el=$('status'); if(el.textContent!==st.t) el.textContent=st.t; el.className=st.c;
   }
-  drawPlot();
 }
 requestAnimationFrame(loop);
 window.addEventListener('beforeunload',stopStream);
+window.spectro={state:S};   // handy for debugging in the browser console
+if(!window.isSecureContext) flash('The camera needs HTTPS (or localhost). “Load photo” still works.','warn');
 })();
 </script>
 </body>
